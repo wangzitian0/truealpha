@@ -52,9 +52,28 @@ function deltaSummary(qObj: Record<string, unknown>): string {
   if (!change || typeof change !== "object") return formatCell(null);
   const answeredDelta = Number(change.answered ?? 0);
   const sign = answeredDelta > 0 ? `+${answeredDelta}` : String(answeredDelta);
-  const subjects = Array.isArray(change.subjects_changed) ? (change.subjects_changed as unknown[]) : [];
-  const sample = subjects.slice(0, 3).map((s) => String(s)).join(", ");
-  return subjects.length > 0 ? `${sign} (${subjects.length}: ${sample})` : sign;
+  if (Array.isArray(change.subjects_changed)) {
+    const subjects = change.subjects_changed as unknown[];
+    const sample = subjects.slice(0, 3).map((s) => String(s)).join(", ");
+    return subjects.length > 0 ? `${sign} (${subjects.length}: ${sample})` : sign;
+  }
+  const changedCount = Number(change.subjects_changed ?? 0);
+  const examples = Array.isArray(change.examples) ? (change.examples as unknown[]) : [];
+  const sample = examples
+    .slice(0, 3)
+    .map((ex) => {
+      if (typeof ex === "string") return ex;
+      if (ex && typeof ex === "object") {
+        const rec = ex as Record<string, unknown>;
+        return String(rec.subject ?? rec.subject_id ?? rec.ticker ?? rec.issuer_id ?? JSON.stringify(rec));
+      }
+      return String(ex);
+    })
+    .join(", ");
+  if (changedCount > 0) {
+    return sample ? `${sign} (${changedCount}: ${sample})` : `${sign} (${changedCount})`;
+  }
+  return sign;
 }
 
 export function QuestionCoverageDetails({ questionCoverage }: { questionCoverage: Record<string, unknown>[] }) {
@@ -223,10 +242,23 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
 
       <DataSection
         title="Nightly verdicts"
-        headers={["Check name", "Verdict", "Ran at", "Summary", "Dagster run ID"]}
+        headers={["Check name", "Verdict", "Age / Max", "Ran at", "Summary", "Dagster run ID"]}
         rows={nightlyVerdicts.map((v) => [
           safeCell(v.check_name),
-          v.ok === true ? "pass" : v.ok === false ? "fail" : "pending",
+          v.freshness_state === "stale"
+            ? "STALE"
+            : v.freshness_state === "missing"
+              ? "MISSING"
+              : v.ok === true
+                ? "pass"
+                : v.ok === false
+                  ? "fail"
+                  : "pending",
+          typeof v.age_hours === "number" && typeof v.max_age_hours === "number"
+            ? `${v.age_hours.toFixed(1)} / ${v.max_age_hours.toFixed(0)}h`
+            : typeof v.max_age_hours === "number"
+              ? `— / ${v.max_age_hours.toFixed(0)}h`
+              : formatCell(null),
           safeCell(v.ran_at),
           safeCell(v.summary),
           safeCell(v.dagster_run_id),
@@ -235,14 +267,62 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
 
       <DataSection
         title="Confidence reports (mart.datahub_confidence_report)"
-        headers={["Universe", "Cutoff", "Run ID", "Created at", "Summary payload"]}
-        rows={confidence.map((c) => [
-          safeCell(c.universe_id),
-          safeCell(c.cutoff),
-          formatShortSha(c.run_id as string | null | undefined),
-          safeCell(c.created_at),
-          safeCell(c.payload),
-        ])}
+        headers={[
+          "Universe",
+          "Family",
+          "Cells",
+          "Mean confidence",
+          "High / Med / Low",
+          "1-origin / 2+-origin",
+          "Agreement rate",
+          "Cutoff",
+        ]}
+        rows={confidence.flatMap((c) => {
+          const payload = (c.payload ?? {}) as Record<string, unknown>;
+          const families = (payload.families ?? {}) as Record<string, Record<string, unknown>>;
+          const cellsByFamily = (payload.cells ?? {}) as Record<string, Record<string, Record<string, unknown>>>;
+          const accuracy = (payload.accuracy ?? {}) as Record<string, Record<string, unknown>>;
+          const familyNames = Object.keys(families).sort();
+          if (familyNames.length === 0) {
+            return [[safeCell(c.universe_id), "—", "0", formatCell(null), formatCell(null), formatCell(null), formatCell(null), safeCell(c.cutoff)]];
+          }
+          return familyNames.map((famName) => {
+            const fam = families[famName] ?? {};
+            const cellEntries = Object.values(cellsByFamily[famName] ?? {});
+            let high = 0;
+            let med = 0;
+            let low = 0;
+            for (const cell of cellEntries) {
+              const tier = typeof cell.tier === "string" ? cell.tier.toLowerCase() : "";
+              const confNum = Number(cell.confidence);
+              if (tier === "high" || (!tier && Number.isFinite(confNum) && confNum >= 0.85)) high += 1;
+              else if (tier === "medium" || (!tier && Number.isFinite(confNum) && confNum >= 0.5)) med += 1;
+              else low += 1;
+            }
+            const tierSummary = cellEntries.length > 0 ? `${high} / ${med} / ${low}` : "—";
+            const originsMap = (fam.by_independent_origins ?? {}) as Record<string, unknown>;
+            let oneOrigin = 0;
+            let multiOrigin = 0;
+            for (const [k, raw] of Object.entries(originsMap)) {
+              const count = Number(raw ?? 0);
+              if (Number.isFinite(count)) {
+                if (Number(k) >= 2) multiOrigin += count;
+                else oneOrigin += count;
+              }
+            }
+            const agreement = fam.agreement_rate ?? accuracy[famName]?.agreement_rate;
+            return [
+              safeCell(c.universe_id),
+              famName,
+              Number(fam.cells ?? 0),
+              safeCell(fam.mean_confidence),
+              tierSummary,
+              `${oneOrigin} / ${multiOrigin}`,
+              agreement === null || agreement === undefined ? formatCell(null) : safeCell(agreement),
+              safeCell(c.cutoff),
+            ];
+          });
+        })}
       />
 
       <DataSection

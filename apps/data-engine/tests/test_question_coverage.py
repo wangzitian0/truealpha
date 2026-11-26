@@ -828,3 +828,30 @@ def test_without_a_previous_head_there_is_no_change() -> None:
     questions = {"q1": _q1((Cell("issuer:a", True),), ["issuer:a"])}
     assert "change" not in with_change(questions, None)["q1"]
     assert "reasons" not in questions["q1"]
+
+
+def test_classify_question_separates_world_absence_and_pipeline_gap() -> None:
+    """Honest metrics (#1747): world_absence shrinks actionable_denominator; pipeline_gap stays actionable."""
+    entry = classify_question(
+        REQ[Question.Q1_MODEL_LEVERAGE],
+        universe_id=TOPT,
+        issuers=["issuer:a", "issuer:b", "issuer:c", "issuer:d", "issuer:e"],
+        cells_by_column={
+            "mart.metric_node_values.value": (
+                Cell("issuer:a", True),
+                Cell("issuer:b", True),
+                Cell("issuer:c", False, "missing_labor_cost_disclosure"),
+                Cell("issuer:d", False, "no_us_gaap_gross_profit_tag", not_applicable=True),
+                Cell("issuer:e", False, "missing_headcount"),
+            )
+        },
+    )
+    assert entry["denominator"] == 4
+    assert entry["answered"] == 2
+    assert entry["not_applicable"] == 1
+    assert entry["world_absence"] == 1
+    assert entry["pipeline_gap"] == 1
+    assert entry["actionable_denominator"] == 3
+    assert entry["actionable_coverage_pct"] == pytest.approx(66.7)
+    line = summary_line({"universe_id": TOPT, "cutoff": "2026-11-26T00:00:00Z", "questions": {"q1": entry}})
+    assert "2/3 answered (66.7% actionable, gaps=1)" in line

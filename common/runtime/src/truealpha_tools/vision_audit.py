@@ -7,6 +7,7 @@ import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from data_engine.environment_universes import scheduled_universe_names
@@ -15,7 +16,7 @@ from infra2_sdk.routing import resolve_app_hostname
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.goal_criteria import load_goal_criteria
 
-from truealpha_tools.nightly_verdicts import HealthReport, read_report
+from truealpha_tools.nightly_verdicts import EXPECTATIONS_PATH, HealthReport, parse_expectations, read_report
 
 
 def _health_url_for(env: str) -> str:
@@ -34,12 +35,13 @@ class GateAuditResult:
 
 @dataclass(frozen=True)
 class CriterionAuditResult:
-    """Verification outcome for one goal criterion that declares verdict_keys."""
+    """Verification outcome for one goal criterion."""
 
     criterion_id: str
     status: str
     verified: bool
     evidence: str
+    outcome: str = "pending"
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,8 @@ class VisionAuditReport:
     nightly_verdicts_summary: dict[str, Any]
     status: str = "fail"
     served_head_freshness: str = "fresh"
+    live_health_ok: bool = False
+    criteria_summary: dict[str, int] = field(default_factory=dict)
     criteria: list[CriterionAuditResult] = field(default_factory=list)
 
 
@@ -143,42 +147,117 @@ def _audit_goal_criteria(
     verdicts_by_check: Mapping[str, Any],
     *,
     env: str,
-) -> tuple[list[CriterionAuditResult], list[str]]:
+    now: datetime | None = None,
+) -> tuple[list[CriterionAuditResult], list[str], dict[str, int]]:
     scheduled = set(scheduled_universe_names(env))
+    check_now = now or datetime.now(UTC)
+    max_age_by_check = {
+        name: exp.max_age_hours
+        for name, exp in parse_expectations(EXPECTATIONS_PATH.read_text(encoding="utf-8"), sorted(scheduled)).items()
+    }
     results: list[CriterionAuditResult] = []
     blockers: list[str] = []
+    counts = {"total": 0, "verified": 0, "partial": 0, "pending": 0, "failed_or_stale": 0}
     for criterion in load_goal_criteria().criteria:
-        if not criterion.verdict_keys:
-            continue
+        counts["total"] += 1
         applicable = [key for key in criterion.verdict_keys if "@" not in key or key.split("@", 1)[1] in scheduled]
-        if not applicable:
+        if criterion.verdict_keys and not applicable:
+            counts["verified"] += 1
+            results.append(
+                CriterionAuditResult(
+                    criterion_id=criterion.id,
+                    status=criterion.status,
+                    verified=True,
+                    evidence=f"not scheduled in {env}",
+                    outcome="not_applicable",
+                )
+            )
             continue
+        if not applicable:
+            if criterion.status == "backed":
+                counts["verified"] += 1
+                results.append(
+                    CriterionAuditResult(
+                        criterion_id=criterion.id,
+                        status=criterion.status,
+                        verified=True,
+                        evidence="backed by contract/CI suite",
+                        outcome="verified",
+                    )
+                )
+            else:
+                outcome_kind = "partial" if criterion.status == "partial" else "pending"
+                counts[outcome_kind] += 1
+                detail = f"awaiting {criterion.pending_on}" if criterion.pending_on else "unwired"
+                blockers.append(f"{criterion.id}: {detail}")
+                results.append(
+                    CriterionAuditResult(
+                        criterion_id=criterion.id,
+                        status=criterion.status,
+                        verified=False,
+                        evidence=detail,
+                        outcome=outcome_kind,
+                    )
+                )
+            continue
+
         parts: list[str] = []
         failed_present = False
+        stale_present = False
         missing_any = False
         for key in applicable:
             verdict = verdicts_by_check.get(key)
             if verdict is None:
                 missing_any = True
                 parts.append(f"{key}=missing")
+                continue
+            age_hours = (check_now - verdict.ran_at).total_seconds() / 3600.0
+            limit_hours = max_age_by_check.get(key, 48.0)
+            if age_hours > limit_hours:
+                stale_present = True
+                parts.append(f"{key}=STALE({age_hours:.1f}h>{limit_hours:.0f}h)")
             elif verdict.ok is True:
                 parts.append(f"{key}=ok({verdict.summary})")
+            elif verdict.ok is None:
+                missing_any = True
+                parts.append(f"{key}=pending({verdict.summary})")
             else:
                 failed_present = True
                 parts.append(f"{key}=FAIL({verdict.summary})")
-        verified = not failed_present and not missing_any
-        # Fail closed on any explicitly recorded non-green criterion verdict or any missing backed criterion.
-        if failed_present or (criterion.status == "backed" and missing_any):
+
+        if failed_present or stale_present or missing_any:
+            counts["failed_or_stale"] += 1
+            verified = False
+            outcome_kind = "failed_or_stale"
             blockers.append(f"{criterion.id}: {'; '.join(parts)}")
+        elif criterion.status == "partial":
+            counts["partial"] += 1
+            verified = False
+            outcome_kind = "partial"
+            if criterion.pending_on:
+                parts.append(f"partial({criterion.pending_on})")
+            blockers.append(f"{criterion.id}: {'; '.join(parts)}")
+        elif criterion.status == "pending":
+            counts["pending"] += 1
+            verified = False
+            outcome_kind = "pending"
+            if criterion.pending_on:
+                parts.append(f"pending({criterion.pending_on})")
+            blockers.append(f"{criterion.id}: {'; '.join(parts)}")
+        else:
+            counts["verified"] += 1
+            verified = True
+            outcome_kind = "verified"
         results.append(
             CriterionAuditResult(
                 criterion_id=criterion.id,
                 status=criterion.status,
                 verified=verified,
                 evidence="; ".join(parts),
+                outcome=outcome_kind,
             )
         )
-    return results, blockers
+    return results, blockers, counts
 
 
 def audit_vision(
@@ -186,8 +265,10 @@ def audit_vision(
     env: str = "production",
     health_url: str | None = None,
     oracle_outcomes: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> VisionAuditReport:
     resolved_url = health_url or _health_url_for(env)
+    check_now = now or datetime.now(UTC)
     try:
         report: HealthReport = read_report(resolved_url, default_http_get())
         verdicts_list = report.verdicts or []
@@ -203,9 +284,11 @@ def audit_vision(
         heads_fresh, freshness_detail = False, "mart.served_head.freshness=unknown"
         effective_outcomes = oracle_outcomes
 
-    criteria_results, criteria_blockers = _audit_goal_criteria(verdicts_by_check, env=env)
+    criteria_results, criteria_blockers, criteria_summary = _audit_goal_criteria(
+        verdicts_by_check, env=env, now=check_now
+    )
     market_fresh = verdicts_by_check.get("market_data_freshness")
-    gates = [
+    core_gates = [
         _verdict_gate(
             "#56",
             "Gate 0: Capture & Environment Readiness",
@@ -221,19 +304,25 @@ def audit_vision(
             "nightly_backtest: no verdict recorded at all in target environment.",
         ),
     ]
-    gates.append(
+    live_health_ok = bool(
+        core_gates[0].verified and heads_fresh and market_fresh is not None and market_fresh.ok is True
+    )
+    gates = [
+        *core_gates,
         _gate(
             "#54",
             "Gate 4: Production Graduation & Vision Completion",
-            all(g.verified for g in gates)
+            all(g.verified for g in core_gates)
+            and heads_fresh
             and market_fresh is not None
             and market_fresh.ok is True
             and not criteria_blockers,
             f"market_data_freshness: {market_fresh.summary if market_fresh else 'missing'}. "
-            + (f"criteria_blockers: {' | '.join(criteria_blockers)}. " if criteria_blockers else "")
+            + f"criteria: {criteria_summary['verified']}/{criteria_summary['total']} verified. "
+            + (f"criteria_blockers: {len(criteria_blockers)}. " if criteria_blockers else "")
             + "Production graduation requires all prior gates VERIFIED and human owner sign-off.",
-        )
-    )
+        ),
+    ]
     if not heads_fresh and gates:
         last = gates[-1]
         gates[-1] = GateAuditResult(last.gate_id, last.title, "OPEN", False, f"{last.evidence} [{freshness_detail}]")
@@ -247,6 +336,8 @@ def audit_vision(
         nightly_verdicts_summary=verdicts_summary,
         status="pass" if all_passed else "fail",
         served_head_freshness="fresh" if heads_fresh else freshness_detail,
+        live_health_ok=live_health_ok,
+        criteria_summary=criteria_summary,
         criteria=criteria_results,
     )
 
@@ -265,11 +356,20 @@ def main() -> int:
         print(json.dumps(asdict(report), indent=2))
         return exit_code
     print(f"=== TrueAlpha Vision Audit [{report.target_env.upper()}] ===")
-    print(f"Health Endpoint: {report.health_url}\nDeployed Release: {report.release or 'unknown'}\n")
+    print(f"Health Endpoint: {report.health_url}\nDeployed Release: {report.release or 'unknown'}")
+    print(f"Live Runtime Health: {'PASS' if report.live_health_ok else 'FAIL'} ({report.served_head_freshness})")
+    if report.criteria_summary:
+        cs = report.criteria_summary
+        print(
+            f"Vision Criteria: {cs.get('verified', 0)}/{cs.get('total', 0)} verified "
+            f"(partial={cs.get('partial', 0)}, pending={cs.get('pending', 0)}, failed_or_stale={cs.get('failed_or_stale', 0)})"
+        )
+    print()
     for g in report.gates:
         print(f"[{'PASS' if g.verified else 'FAIL'}] {g.gate_id} {g.title}: {g.status}\n       Evidence: {g.evidence}")
     for c in report.criteria:
-        print(f"[{'PASS' if c.verified else 'INFO'}] {c.criterion_id} ({c.status}): {c.evidence}")
+        tag = c.outcome.upper()
+        print(f"[{tag:15s}] {c.criterion_id} ({c.status}): {c.evidence}")
     print(
         "\nStatus: All Gate Epics physically verified."
         if report.all_passed

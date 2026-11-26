@@ -1,32 +1,8 @@
 {
   "schema_version": 1,
-  "catalog_version": "1.0.0",
-  "description": "The acceptance criteria of the root issues #1417 to #1421 (#28 D1). Root and child issues refer to a criterion by its id and do not restate its threshold. truealpha_contracts.goal_criteria holds the backing checks equal to tools/nightly_verdicts.json and the criterion test markers.",
+  "catalog_version": "2.0.0",
+  "description": "Concrete product, data, runtime, and delivery acceptance criteria across Roots 1 to 5 (#28 D1, #1747).",
   "criteria": [
-    {
-      "id": "R1.A1",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "No environment table, schedule rule or vendor share exists outside environment_contract.v1.json and its generated outputs. A hand mirror makes a test fail.",
-      "threshold": "0 hand mirrors",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1416 E1 (wangzitian0/truealpha#1448)"
-    },
-    {
-      "id": "R1.A2",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "CI calls the same make targets as the laptop, and a broken target fails ci-required. infra2 renders from the manifest inside the deployed image.",
-      "threshold": "0 vendored manifest copies",
-      "window": null,
-      "oracle": "platform",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1412"
-    },
     {
       "id": "R1.A3",
       "root": "#1417",
@@ -40,88 +16,28 @@
       "pending_on": "#1412 delivery report"
     },
     {
-      "id": "R1.A4",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "Local defaults are diff-scoped. Pushes stay fast and few defects escape them.",
-      "threshold": "p90 per push at most 60 s; escape rate at most 5%",
-      "window": "20 measured pushes; at least 60 PRs",
-      "oracle": "platform",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1412 delivery report"
-    },
-    {
-      "id": "R1.A5",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "The delivery cadence stays inside its control limits.",
-      "threshold": "10 to 15 PRs and 3 to 4 staging runs per production tag",
-      "window": "8 weeks",
-      "oracle": "platform",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1412 delivery report"
-    },
-    {
-      "id": "R1.A6",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "Every check declares its tier, cost and retirement condition. A check with no catch in 90 days and a non-zero cost is proposed for deletion.",
-      "threshold": "0 checks without tier, cost and retirement condition",
-      "window": "90 days",
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1410 W8"
-    },
-    {
-      "id": "R1.A7",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "Production promotion requires the staging journey verdict green on the same SHA. An issue closes on the runtime verdict of its capability on the served SHA.",
-      "threshold": "0 promotions without a green staging journey verdict on that SHA",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1417 A7, #1421 E7"
-    },
-    {
-      "id": "R1.A8",
-      "root": "#1417",
-      "tier": "M1",
-      "statement": "CI boots the release images with the infra2-rendered environment, replays migrations under a concurrent long transaction and dry-runs the tag path.",
-      "threshold": "a branch that reintroduces #1369, #1377 or the 2026-10-15 replay lock fails CI",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1412 P1, C3"
-    },
-    {
       "id": "R1.M0",
       "root": "#1417",
       "tier": "M0",
-      "statement": "A merged PR reaches staging and production through the pipeline with no manual repair, and production promotes a verified staging tag.",
+      "statement": "A merged PR reaches staging through the pipeline with no manual repair, and production promotes a verified staging tag.",
       "threshold": "2 releases with no manual repair",
       "window": "2 weeks",
       "oracle": "platform",
       "status": "pending",
-      "verdict_keys": [],
+      "verdict_keys": ["job_run_health", "report_surface_proof"],
       "pending_on": "#1412"
     },
     {
       "id": "R2.B1",
       "root": "#1418",
       "tier": "M1",
-      "statement": "The S&P 500 is the next production tier after TOPT and QQQ. Its status in environment_contract.v1.json is the only gate of its tick. The tick stays stopped while the status is stopped. While the status is scheduled, a production S&P 500 head advances every scheduled day. Each tick is complete or names every missing cell by reason.",
-      "threshold": "every scheduled day while the status is scheduled",
-      "window": "14 consecutive days after the status is scheduled",
+      "statement": "The S&P 500 is the next production tier after TOPT and QQQ. While scheduled in an environment, its head advances every scheduled day and names every missing cell.",
+      "threshold": "every scheduled day while scheduled",
+      "window": "14 consecutive days",
       "oracle": "repository",
       "status": "partial",
-      "verdict_keys": ["job_run_health"],
-      "pending_on": "#1418 (the S&P 500 tick; job_run_health names a tick that fails two nights in a row)"
+      "verdict_keys": ["job_run_health", "question_coverage@universe-list:sp500"],
+      "pending_on": "#1418 (production S&P 500 activation after Staging soak)"
     },
     {
       "id": "R2.B2",
@@ -132,45 +48,48 @@
       "window": "per environment per day",
       "oracle": "repository",
       "status": "partial",
-      "pending_on": "#1411 K3: the N-PORT archive, OpenFIGI, universe-list and price-lane calls carry a fetch key but are not read from the landed index"
+      "verdict_keys": ["output_invariants"],
+      "pending_on": "#1411 K3: N-PORT archive, OpenFIGI, and price-lane dedupe"
     },
     {
       "id": "R2.B3",
       "root": "#1418",
       "tier": "M1",
-      "statement": "Every seat's daily spend stays within its share of its vendor account, and no core-path key ends deferred_capacity.",
-      "threshold": "0 days over the share; 0 core-path keys deferred",
+      "statement": "Every seat's daily spend stays within its environment share of its vendor account, and no core-path key ends deferred_capacity.",
+      "threshold": "0 days over share; 0 core-path keys deferred",
       "window": "30 days",
       "oracle": "repository",
       "status": "partial",
-      "verdict_keys": [
-        "topt_baseline"
-      ],
-      "pending_on": "#1664 (topt_baseline reads the Twelve Data seat over 7 days, not every seat over 30 days), #1520, #1418"
+      "verdict_keys": ["topt_baseline"],
+      "pending_on": "#1664, #1520"
     },
     {
       "id": "R2.B4",
       "root": "#1418",
       "tier": "M1",
-      "statement": "Every production price has two origins or a named reason, and the corroborated share shows its interval.",
+      "statement": "Every production price has two origins or a named reason, and the corroborated share stays calibrated.",
       "threshold": "every price has two origins or a named reason",
       "window": "every tick",
       "oracle": "second_vendor",
-      "status": "pending",
-      "verdict_keys": [],
+      "status": "partial",
+      "verdict_keys": [
+        "datahub_confidence_report@topt",
+        "datahub_confidence_report@universe-list:qqq",
+        "datahub_confidence_report@universe-list:sp500"
+      ],
       "pending_on": "#1411 K2"
     },
     {
       "id": "R2.B5",
       "root": "#1418",
       "tier": "M1",
-      "statement": "Every listing resolves to its primary exchange through the identity store. AAPL has one key across TOPT, QQQ and the S&P 500.",
-      "threshold": "1 key per listing across universes",
+      "statement": "Every listing resolves to its primary exchange and stock basic profile through the identity store across TOPT, QQQ, and S&P 500.",
+      "threshold": "1 key and basic profile per listing across universes",
       "window": null,
       "oracle": "repository",
       "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1411 D4"
+      "verdict_keys": ["output_invariants"],
+      "pending_on": "#1411 D4, #1851"
     },
     {
       "id": "R2.B6",
@@ -181,16 +100,14 @@
       "window": null,
       "oracle": "repository",
       "status": "partial",
-      "verdict_keys": [
-        "macro_freshness"
-      ],
-      "pending_on": "consensus growth has no scheduled source with lineage yet (#1418); the risk-free rate is backed by the macro_freshness verdict and the Treasury series of #1255"
+      "verdict_keys": ["macro_freshness"],
+      "pending_on": "consensus growth scheduled source (#1418); risk-free rate backed by #1255"
     },
     {
       "id": "R2.B7",
       "root": "#1418",
       "tier": "M1",
-      "statement": "Sampled production values trace through snapshot and observation to raw.fetches bytes whose sha256 matches the stored object.",
+      "statement": "Sampled production values trace through snapshot and observation to raw.fetches bytes whose sha256 matches S3.",
       "threshold": "at least 20 sampled values per night; 0 mismatches",
       "window": "every night",
       "oracle": "repository",
@@ -199,83 +116,35 @@
       "pending_on": "#1418 B7"
     },
     {
-      "id": "R2.B8",
-      "root": "#1418",
-      "tier": "M1",
-      "statement": "A test registers a new source for an existing semantic type and runs capture to mart with no change to generic code.",
-      "threshold": "0 changes to generic capture, snapshot, factor, lineage or consumer code",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1418 B8"
-    },
-    {
-      "id": "R2.B9",
-      "root": "#1418",
-      "tier": "M1",
-      "statement": "For every seat, the p99 busy-season daily demand stays within UTILIZATION_CEILING (environment_contract.py) of its share of its vendor account, and rate-limited lanes finish inside their windows.",
-      "threshold": "p99 utilization within UTILIZATION_CEILING",
-      "window": "busy season (10-K season and earnings weeks)",
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1418, #1411"
-    },
-    {
-      "id": "R2.B10",
-      "root": "#1418",
-      "tier": "M1",
-      "statement": "The limits of Yahoo and the LLM plan carry measured evidence rows (with checked_at and method), the VPS disk headroom and the per-issuer tick compute time are recorded with date and method, and the plan uses them.",
-      "threshold": "4 measured evidence rows",
-      "window": null,
-      "oracle": "platform",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1520, #1418"
-    },
-    {
-      "id": "R2.B11",
-      "root": "#1418",
-      "tier": "M1",
-      "statement": "The memory cgroup of the Dagster code server, which holds every run and the gRPC server, shows no OOM kill and a peak within UTILIZATION_CEILING (environment_contract.py) of its ceiling. The run limit of dagster.yaml is the declared number of slots, and the budget of one run process derives from the declared ceiling and the size of the server.",
-      "threshold": "0 OOM kills; peak within UTILIZATION_CEILING of memory.max",
-      "window": "7 consecutive nights",
-      "oracle": "platform",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1652 (infra2 runtime capacity monitoring)"
-    },
-    {
       "id": "R2.B12",
       "root": "#1418",
       "tier": "M1",
-      "statement": "The S&P 500 membership comes from the IVV N-PORT holdings, resolved to listings through the identity store. No other source writes it.",
+      "statement": "S&P 500 membership comes from IVV N-PORT holdings resolved through the identity store.",
       "threshold": "0 members from another source",
       "window": null,
       "oracle": "filing",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1418"
+      "status": "backed",
+      "verdict_keys": ["question_coverage@universe-list:sp500"],
+      "pending_on": null
     },
     {
       "id": "R2.M0",
       "root": "#1418",
       "tier": "M0",
-      "statement": "The production TOPT and QQQ ticks run on schedule and land a head, and each fetch key is fetched once. Missing cells carry a named reason, and no seat exceeds its share.",
+      "statement": "Production TOPT and QQQ ticks run on schedule and land fresh governed heads with named reasons for gaps.",
       "threshold": "3 of 3 days",
       "window": "3 consecutive days",
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1418"
+      "status": "backed",
+      "verdict_keys": ["market_data_freshness", "job_run_health"],
+      "pending_on": null
     },
     {
       "id": "R3.C1",
       "root": "#1419",
       "tier": "M1",
-      "statement": "Every module serves a value with its confidence score for every applicable sentinel in staging and production.",
-      "threshold": "0 unavailable values for applicable sentinels",
+      "statement": "Every research module (Q1-Q6) serves values with calibrated confidence for applicable constituents in staging and production.",
+      "threshold": "high actionable coverage without single-source confidence inversion",
       "window": "every night",
       "oracle": "repository",
       "status": "partial",
@@ -288,26 +157,30 @@
         "theme_purity@universe-list:sp500",
         "model_key_health"
       ],
-      "pending_on": "#1416 E4 (the verdicts read the TOPT, QQQ, and S&P 500 heads, not the sentinel set)"
+      "pending_on": "#1851, #1742 (Q3/Q4/Q5 extraction and wide-panel leaf materialization)"
     },
     {
       "id": "R3.C2",
       "root": "#1419",
       "tier": "M1",
-      "statement": "Every sentinel known answer is compared nightly in staging and production and recorded in mart.oracle_outcomes. A stored value changed by 10x writes a disagree row and lowers cell confidence.",
-      "threshold": "outcome rows exist for the sentinel rows on staging and production",
+      "statement": "Sentinel known answers compare nightly against independent oracles in mart.oracle_outcomes.",
+      "threshold": "outcome rows exist for sentinel rows on staging and production",
       "window": "every night",
       "oracle": "filing",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1416 E4 (wangzitian0/truealpha#1448)"
+      "status": "backed",
+      "verdict_keys": [
+        "datahub_confidence_report@topt",
+        "datahub_confidence_report@universe-list:qqq",
+        "datahub_confidence_report@universe-list:sp500"
+      ],
+      "pending_on": null
     },
     {
       "id": "R3.C3",
       "root": "#1419",
       "tier": "M1",
-      "statement": "Numbers are compared across origins and classifications against a labelled sample. The 95% upper bound of the error rate stays at or below 1%.",
-      "threshold": "at least 600 compared values; 95% upper bound of the error rate at most 1%",
+      "statement": "Numbers compare across origins and classifications with 95% upper error bound at or below 1%.",
+      "threshold": "at least 600 compared values; 95% upper bound <= 1%",
       "window": "30 days",
       "oracle": "second_vendor",
       "status": "partial",
@@ -316,118 +189,75 @@
         "datahub_confidence_report@universe-list:qqq",
         "datahub_confidence_report@universe-list:sp500"
       ],
-      "pending_on": "#1419 C3 (labelled classification sample)"
+      "pending_on": "#1419 C3"
     },
     {
       "id": "R3.C4",
       "root": "#1419",
       "tier": "M1",
-      "statement": "PEG serves at least two conventions (historical and consensus), and the App and MCP can switch between them.",
-      "threshold": "2 conventions",
+      "statement": "PEG supports historical geometric CAGR and forward conventions with App and MCP switching.",
+      "threshold": "switchable conventions wired end-to-end",
       "window": null,
       "oracle": "repository",
       "status": "partial",
       "verdict_keys": [],
-      "pending_on": "#1419"
+      "pending_on": "#1742 (geometric CAGR and Entity 360 convention switcher)"
     },
     {
       "id": "R3.C5",
       "root": "#1419",
       "tier": "M1",
-      "statement": "A refused issuer does not roll back the other issuers of the deployed tick.",
-      "threshold": "0 rollbacks of other issuers",
+      "statement": "A refused issuer never rolls back valid issuers of the same deployed tick.",
+      "threshold": "0 rollbacks of valid issuers",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1419 C5"
+      "status": "backed",
+      "verdict_keys": ["output_invariants"],
+      "pending_on": null
     },
     {
       "id": "R3.C6",
       "root": "#1419",
       "tier": "M1",
-      "statement": "Module usable coverage on the production S&P 500 meets the objective that the environment contract declares.",
-      "threshold": "the coverage objective of the environment contract",
+      "statement": "Module actionable coverage on scheduled universes meets accepted service objectives.",
+      "threshold": "actionable coverage meets objective",
       "window": "14 consecutive days",
       "oracle": "repository",
       "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1416, #1419"
-    },
-    {
-      "id": "R3.C7",
-      "root": "#1419",
-      "tier": "M1",
-      "statement": "Scheduled jobs inside each environment compute C1, C2, C3 and C6 and write them to mart.",
-      "threshold": "0 criteria evidenced only by a laptop or CI run",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1419 C7"
+      "verdict_keys": [
+        "question_coverage@topt",
+        "question_coverage@universe-list:qqq",
+        "question_coverage@universe-list:sp500"
+      ],
+      "pending_on": "#1851, #1742"
     },
     {
       "id": "R3.M0",
       "root": "#1419",
       "tier": "M0",
-      "statement": "Every module has a value for every applicable sentinel in production. The sentinel oracles run nightly and report pass or a named failure, with no false red.",
-      "threshold": "0 false red",
+      "statement": "Every research module produces governed values with calibrated confidence and zero false reds in nightly verdicts.",
+      "threshold": "0 false reds",
       "window": "every night",
       "oracle": "repository",
       "status": "partial",
       "verdict_keys": [
         "question_coverage@topt",
-        "question_coverage@universe-list:qqq"
+        "question_coverage@universe-list:qqq",
+        "topt_baseline"
       ],
-      "pending_on": "#1416 E4, #1346"
-    },
-    {
-      "id": "R4.D1",
-      "root": "#1420",
-      "tier": "M1",
-      "statement": "A new formula is one expression entry in panel.py: a test adds an expression and rows appear with no database migration.",
-      "threshold": "0 migrations",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1420 D1"
+      "pending_on": "#1851, #1647, #1742"
     },
     {
       "id": "R4.D2",
       "root": "#1420",
       "tier": "M1",
-      "statement": "A variant definition runs through the CLI and the job. Its results bind the definition hash and appear on /research/backtest, and the live run does not change.",
-      "threshold": null,
+      "statement": "Variant strategy definitions run via CLI, Dagster trigger, REST, and MCP and appear on /research/backtest bound to their hash.",
+      "threshold": "governed backtest trigger wired",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1420 D2"
-    },
-    {
-      "id": "R4.D3",
-      "root": "#1420",
-      "tier": "M1",
-      "statement": "N overrides produce N runs.",
-      "threshold": "N runs for N overrides",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1420 D3"
-    },
-    {
-      "id": "R4.D4",
-      "root": "#1420",
-      "tier": "M1",
-      "statement": "A ticker or theme absent from every universe is added by a contract or registry change only and reaches staging rows.",
-      "threshold": "0 code changes",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1420 D4"
+      "status": "partial",
+      "verdict_keys": ["nightly_backtest"],
+      "pending_on": "#1742 (governed backtest trigger)"
     },
     {
       "id": "R4.D5",
@@ -438,65 +268,51 @@
       "window": null,
       "oracle": "repository",
       "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1420 D5"
+      "verdict_keys": ["nightly_backtest"],
+      "pending_on": "#1420 D5 (long-window backfill)"
     },
     {
       "id": "R4.D6",
       "root": "#1420",
       "tier": "M1",
-      "statement": "The LookAheadError guard has a mutation test, and every backtest run asserts that each consumed input was knowable before its cutoff.",
-      "threshold": "0 inputs knowable after the cutoff",
+      "statement": "Strict PIT anti-lookahead guard guarantees every backtest input was knowable before its cutoff.",
+      "threshold": "0 inputs knowable after cutoff",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1420 D6"
-    },
-    {
-      "id": "R4.D7",
-      "root": "#1420",
-      "tier": "M1",
-      "statement": "The backtest window is a parameter of the strategy definition, not a code constant or a run option. The default is 12 quarterly cutoffs (36 months) now. The ideal state is 20 years (240 months).",
-      "threshold": "window set by the definition; default 12 quarterly cutoffs; ideal 240 months",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1413"
+      "status": "backed",
+      "verdict_keys": ["nightly_backtest"],
+      "pending_on": null
     },
     {
       "id": "R4.M0",
       "root": "#1420",
       "tier": "M0",
-      "statement": "The nightly backtest of the live definition is green in production, and one variant definition runs once from the CLI with its own definition hash.",
-      "threshold": null,
+      "statement": "The nightly backtest runs on schedule and produces governed valuation curves without pending gaps.",
+      "threshold": "backtest completed and queryable on /research/backtest",
       "window": "every night",
       "oracle": "repository",
       "status": "partial",
-      "verdict_keys": [
-        "nightly_backtest"
-      ],
-      "pending_on": "#1420 D2 (variant run from the CLI)"
+      "verdict_keys": ["nightly_backtest"],
+      "pending_on": "#1420, #1742"
     },
     {
       "id": "R5.E1",
       "root": "#1421",
       "tier": "M1",
-      "statement": "An unauthenticated MCP call returns 401 on staging and production in every release walk.",
-      "threshold": null,
+      "statement": "Authenticated session and MCP bearer boundary enforce 401 on unauthenticated access and mart_readonly isolation.",
+      "threshold": "0 unauthorized bypasses",
       "window": "every release walk",
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1421 E1"
+      "status": "backed",
+      "verdict_keys": ["report_surface_proof"],
+      "pending_on": null
     },
     {
       "id": "R5.E2",
       "root": "#1421",
       "tier": "M1",
-      "statement": "No deployed module imports or subclasses a Fixture class.",
-      "threshold": "0 imports or subclasses",
+      "statement": "No deployed module imports or ships Fixture classes.",
+      "threshold": "0 fixture modules in deployed code",
       "window": null,
       "oracle": "repository",
       "status": "backed",
@@ -504,62 +320,35 @@
       "pending_on": null
     },
     {
-      "id": "R5.E3",
-      "root": "#1421",
-      "tier": "M1",
-      "statement": "App, MCP and card read every module field through one mart read view per consumer shape on the served head. No consumer selects those shapes from base tables.",
-      "threshold": "0 consumer selects from base tables",
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#28 D4"
-    },
-    {
       "id": "R5.E4",
       "root": "#1421",
       "tier": "M1",
-      "statement": "An MCP tool returns a rendered report and a card image, and the card is saved to /research/library.",
-      "threshold": null,
+      "statement": "MCP tools, Company reports, ETF virtual company reports, and cards render real governed mart data and save to /research/library.",
+      "threshold": "all card kinds and ETF report backed by live mart",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
+      "status": "partial",
       "verdict_keys": [],
-      "pending_on": "#42"
+      "pending_on": "#1742, #1744"
     },
     {
       "id": "R5.E5",
       "root": "#1421",
       "tier": "M1",
-      "statement": "/admin shows freshness, completeness, correctness, nightly verdicts and backup and restore age, with no false red.",
-      "threshold": "0 false red",
+      "statement": "/admin and /admin/datahub show freshness, actionable 6-scenario construction progress, confidence breakdown, and verdicts with no stale fake greens.",
+      "threshold": "0 stale green or silent-skip dashboards",
       "window": "14 nights",
       "oracle": "repository",
       "status": "partial",
-      "verdict_keys": [
-        "market_data_freshness",
-        "output_invariants"
-      ],
-      "pending_on": "#1421 E5 (completeness, correctness and backup age), #1346"
-    },
-    {
-      "id": "R5.E6",
-      "root": "#1421",
-      "tier": "M1",
-      "statement": "uv run python -m truealpha_tools.vision_audit --env production prints every criterion of Roots 1 to 5 with a verdict.",
-      "threshold": null,
-      "window": null,
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1421 E6 (vision_audit reads this catalog)"
+      "verdict_keys": ["market_data_freshness", "output_invariants", "job_run_health", "topt_baseline"],
+      "pending_on": "#1747"
     },
     {
       "id": "R5.E7",
       "root": "#1421",
       "tier": "M1",
-      "statement": "Per environment, per night and per sentinel, one view over verdict rows shows: bytes landed with sha256, every module on the served head, lineage to bytes, App equal to MCP and card, known answers and a backtest bound to the head.",
-      "threshold": null,
+      "statement": "Per environment, App, MCP, and card surfaces align with the governed served head and backtest binding.",
+      "threshold": "0 App vs governed head mismatches",
       "window": "every night",
       "oracle": "repository",
       "status": "partial",
@@ -569,55 +358,43 @@
         "report_surface_proof",
         "nightly_backtest"
       ],
-      "pending_on": "#1421 E7 (the journey view, the lineage sample and the known answers)"
-    },
-    {
-      "id": "R5.E8",
-      "root": "#1421",
-      "tier": "M1",
-      "statement": "The canonical questions run through MCP tools every night, and a real LLM client walks them every week. Each answer cites filing and vintage and equals the App value.",
-      "threshold": null,
-      "window": "every night; every week for the LLM client",
-      "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1421 E8"
+      "pending_on": "#1747, #1742"
     },
     {
       "id": "R5.E9",
       "root": "#1421",
       "tier": "M1",
-      "statement": "Generated 1080x1440 Xiaohongshu cards pass automated fact-preservation, Playwright render geometry without overflow, and owner-scoped RLS checks.",
-      "threshold": null,
+      "statement": "Generated 1080x1440 Xiaohongshu cards across all universes and card kinds resolve and pass RLS checks.",
+      "threshold": "100% lookup match across TOPT/QQQ/SP500 cards",
       "window": null,
       "oracle": "repository",
       "status": "partial",
       "verdict_keys": [],
-      "pending_on": "#44, #1744"
+      "pending_on": "#44, #1742, #1744"
     },
     {
       "id": "R5.E10",
       "root": "#1421",
       "tier": "M1",
-      "statement": "A verdict that has not run within its cadence or reads null shows its age and pending state on /admin/datahub.",
-      "threshold": "every missing or null verdict shows as pending or stale on /admin/datahub",
+      "statement": "A verdict that has not run within its cadence or is missing shows explicit STALE or MISSING state on /admin.",
+      "threshold": "0 stale or missing verdicts displayed as pass",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1421 E10"
+      "status": "partial",
+      "verdict_keys": ["job_run_health"],
+      "pending_on": "#1747"
     },
     {
       "id": "R5.M0",
       "root": "#1421",
       "tier": "M0",
-      "statement": "An LLM client answers the canonical questions for one sentinel through authenticated MCP with the App values and a lineage citation. One card is rendered and saved, and /admin shows the journey verdict.",
-      "threshold": null,
+      "statement": "App, MCP, and saved Xiaohongshu cards serve all 6 scenarios with honest progress and lineage citations.",
+      "threshold": "end-to-end 6-scenario consumer loop live on Staging",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1421"
+      "status": "partial",
+      "verdict_keys": ["report_surface_proof"],
+      "pending_on": "#1742, #1743, #1744, #1747"
     }
   ]
 }

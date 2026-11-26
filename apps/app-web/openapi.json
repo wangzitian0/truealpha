@@ -1957,6 +1957,305 @@
         ],
         "title": "CheckDetail"
       },
+      "ConstructionBacktestDto": {
+        "properties": {
+          "strategy_key": {
+            "type": "string",
+            "title": "Strategy Key"
+          },
+          "universe_id": {
+            "type": "string",
+            "title": "Universe Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "executed_at": {
+            "type": "string",
+            "title": "Executed At"
+          },
+          "cagr_monthly": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cagr Monthly"
+          },
+          "sharpe_daily": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Daily"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_key",
+          "universe_id",
+          "status",
+          "run_id",
+          "executed_at"
+        ],
+        "title": "ConstructionBacktestDto"
+      },
+      "ConstructionProgressDto": {
+        "properties": {
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "criteria_total": {
+            "type": "integer",
+            "title": "Criteria Total",
+            "default": 0
+          },
+          "criteria_verified": {
+            "type": "integer",
+            "title": "Criteria Verified",
+            "default": 0
+          },
+          "criteria_partial": {
+            "type": "integer",
+            "title": "Criteria Partial",
+            "default": 0
+          },
+          "criteria_pending": {
+            "type": "integer",
+            "title": "Criteria Pending",
+            "default": 0
+          },
+          "criteria_failed_or_stale": {
+            "type": "integer",
+            "title": "Criteria Failed Or Stale",
+            "default": 0
+          },
+          "criteria": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Criteria"
+          },
+          "universes": {
+            "items": {
+              "$ref": "#/components/schemas/ConstructionUniverseDto"
+            },
+            "type": "array",
+            "title": "Universes"
+          },
+          "strategy_runs": {
+            "items": {
+              "$ref": "#/components/schemas/ConstructionStrategyRunDto"
+            },
+            "type": "array",
+            "title": "Strategy Runs"
+          },
+          "backtest_runs": {
+            "items": {
+              "$ref": "#/components/schemas/ConstructionBacktestDto"
+            },
+            "type": "array",
+            "title": "Backtest Runs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "environment"
+        ],
+        "title": "ConstructionProgressDto"
+      },
+      "ConstructionQuestionDto": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "answered": {
+            "type": "integer",
+            "title": "Answered",
+            "default": 0
+          },
+          "denominator": {
+            "type": "integer",
+            "title": "Denominator",
+            "default": 0
+          },
+          "actionable_denominator": {
+            "type": "integer",
+            "title": "Actionable Denominator",
+            "default": 0
+          },
+          "actionable_coverage_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Coverage Pct"
+          },
+          "world_absence": {
+            "type": "integer",
+            "title": "World Absence",
+            "default": 0
+          },
+          "pipeline_gap": {
+            "type": "integer",
+            "title": "Pipeline Gap",
+            "default": 0
+          },
+          "not_applicable": {
+            "type": "integer",
+            "title": "Not Applicable",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_id"
+        ],
+        "title": "ConstructionQuestionDto"
+      },
+      "ConstructionStrategyRunDto": {
+        "properties": {
+          "strategy_key": {
+            "type": "string",
+            "title": "Strategy Key"
+          },
+          "strategy_run_id": {
+            "type": "string",
+            "title": "Strategy Run Id"
+          },
+          "executed_at": {
+            "type": "string",
+            "title": "Executed At"
+          },
+          "selected_count": {
+            "type": "integer",
+            "title": "Selected Count",
+            "default": 0
+          },
+          "eligible_count": {
+            "type": "integer",
+            "title": "Eligible Count",
+            "default": 0
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_key",
+          "strategy_run_id",
+          "executed_at"
+        ],
+        "title": "ConstructionStrategyRunDto"
+      },
+      "ConstructionUniverseDto": {
+        "properties": {
+          "universe_key": {
+            "type": "string",
+            "title": "Universe Key"
+          },
+          "universe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Universe Id"
+          },
+          "scheduled": {
+            "type": "boolean",
+            "title": "Scheduled",
+            "default": false
+          },
+          "head_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Run Id"
+          },
+          "served_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Served Run Id"
+          },
+          "freshness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness"
+          },
+          "availability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability"
+          },
+          "report_matches_head": {
+            "type": "boolean",
+            "title": "Report Matches Head",
+            "default": false
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ConstructionQuestionDto"
+            },
+            "type": "array",
+            "title": "Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "universe_key"
+        ],
+        "title": "ConstructionUniverseDto"
+      },
       "CoverageDecisionDto": {
         "properties": {
           "issuer_id": {
@@ -3253,6 +3552,16 @@
             },
             "type": "array",
             "title": "Rollback Requests"
+          },
+          "construction_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConstructionProgressDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

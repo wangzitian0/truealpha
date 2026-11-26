@@ -10,6 +10,7 @@ from typing import Any
 import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.goal_criteria import load_goal_criteria
 from truealpha_contracts.universes import id_prefix_like, job_name
 from truealpha_runtime.checks import ObjectStorageCheck
 
@@ -210,6 +211,400 @@ class OpsDataEngineBuildDto(BaseModel):
     created_at: str
 
 
+STRATEGY_RUN_COUNTS_SQL = """
+  with latest as (
+    select distinct on (strategy_key)
+      strategy_run_id, strategy_key,
+      to_char(executed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as executed_at
+    from mart.strategy_runs
+    order by strategy_key, executed_at desc, created_at desc, strategy_run_id desc
+  )
+  select l.strategy_key, l.strategy_run_id, l.executed_at,
+         count(d.strategy_decision_id)::int as total_count,
+         (count(*) filter (where d.eligible))::int as eligible_count,
+         (count(*) filter (where d.outcome = 'selected'))::int as selected_count
+  from latest l
+  left join mart.strategy_decisions d on d.strategy_run_id = l.strategy_run_id
+  group by l.strategy_key, l.strategy_run_id, l.executed_at
+  order by l.strategy_key
+"""
+
+BACKTEST_LATEST_SQL = """
+  select distinct on (strategy_key, universe_id)
+    strategy_key, universe_id, status, run_id,
+    to_char(executed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as executed_at,
+    cagr_monthly::text as cagr_monthly,
+    sharpe_daily::text as sharpe_daily
+  from mart.backtest_runs
+  order by strategy_key, universe_id, executed_at desc, created_at desc, run_id desc
+"""
+
+
+class ConstructionQuestionDto(BaseModel):
+    question_id: str
+    answered: int = 0
+    denominator: int = 0
+    actionable_denominator: int = 0
+    actionable_coverage_pct: float | None = None
+    world_absence: int = 0
+    pipeline_gap: int = 0
+    not_applicable: int = 0
+
+
+class ConstructionUniverseDto(BaseModel):
+    universe_key: str
+    universe_id: str | None = None
+    scheduled: bool = False
+    head_run_id: str | None = None
+    served_run_id: str | None = None
+    freshness: str | None = None
+    availability: str | None = None
+    report_matches_head: bool = False
+    questions: list[ConstructionQuestionDto] = Field(default_factory=list)
+
+
+class ConstructionStrategyRunDto(BaseModel):
+    strategy_key: str
+    strategy_run_id: str
+    executed_at: str
+    selected_count: int = 0
+    eligible_count: int = 0
+    total_count: int = 0
+
+
+class ConstructionBacktestDto(BaseModel):
+    strategy_key: str
+    universe_id: str
+    status: str
+    run_id: str
+    executed_at: str
+    cagr_monthly: str | None = None
+    sharpe_daily: str | None = None
+
+
+class ConstructionProgressDto(BaseModel):
+    environment: str
+    criteria_total: int = 0
+    criteria_verified: int = 0
+    criteria_partial: int = 0
+    criteria_pending: int = 0
+    criteria_failed_or_stale: int = 0
+    criteria: list[dict[str, Any]] = Field(default_factory=list)
+    universes: list[ConstructionUniverseDto] = Field(default_factory=list)
+    strategy_runs: list[ConstructionStrategyRunDto] = Field(default_factory=list)
+    backtest_runs: list[ConstructionBacktestDto] = Field(default_factory=list)
+
+
+def _parse_iso_utc(raw: Any) -> datetime | None:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.astimezone(UTC) if raw.tzinfo else raw.replace(tzinfo=UTC)
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _verdict_cadence_map(contract: Any, env: str | None) -> dict[str, float]:
+    verdicts_cfg = getattr(contract, "nightly_verdicts", None) or {}
+    checks = verdicts_cfg.get("checks", {})
+    per_universe = verdicts_cfg.get("per_universe", {})
+    cadences: dict[str, float] = {
+        str(name): float(meta.get("cadence_hours", 24)) for name, meta in checks.items() if isinstance(meta, dict)
+    }
+    scheduled_lanes = [contract.universes[k].lane_name for k in contract.scheduled_universes(env)]
+    if not scheduled_lanes and not env:
+        scheduled_lanes = [u.lane_name for u in contract.universes.values() if not u.is_sentinel]
+    for name, meta in per_universe.items():
+        if isinstance(meta, dict):
+            cadence = float(meta.get("cadence_hours", 24))
+            for lane in scheduled_lanes:
+                cadences[f"{name}@{lane}"] = cadence
+    return cadences
+
+
+def _enrich_nightly_verdicts(
+    verdicts: list[dict[str, Any]],
+    *,
+    env: str | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    contract = load_environment_contract()
+    check_now = now or datetime.now(UTC)
+    cadence_by_name = _verdict_cadence_map(contract, env)
+    all_per_universe = (getattr(contract, "nightly_verdicts", None) or {}).get("per_universe", {})
+    enriched: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in verdicts:
+        item = dict(row)
+        name = str(item.get("check_name") or "")
+        seen.add(name)
+        base_name = name.split("@", 1)[0]
+        cadence_hours = cadence_by_name.get(name)
+        if cadence_hours is None and "@" in name and isinstance(all_per_universe.get(base_name), dict):
+            cadence_hours = float(all_per_universe[base_name].get("cadence_hours", 24))
+        max_age_hours = round(cadence_hours * 2.0, 2) if cadence_hours is not None else None
+        ran_at_dt = _parse_iso_utc(item.get("ran_at"))
+        age_hours = round(max(0.0, (check_now - ran_at_dt).total_seconds() / 3600.0), 2) if ran_at_dt else None
+        ok_val = item.get("ok")
+        if age_hours is not None and max_age_hours is not None and age_hours > max_age_hours:
+            freshness_state = "stale"
+        elif ok_val is True:
+            freshness_state = "pass"
+        elif ok_val is False:
+            freshness_state = "fail"
+        else:
+            freshness_state = "pending"
+        expected = contract.expects_verdict(name, env) if name else False
+        item.update(
+            {
+                "freshness_state": freshness_state,
+                "age_hours": age_hours,
+                "cadence_hours": cadence_hours,
+                "max_age_hours": max_age_hours,
+                "expected": expected,
+            }
+        )
+        enriched.append(item)
+    for name, cadence_hours in sorted(cadence_by_name.items()):
+        if name in seen or not contract.expects_verdict(name, env):
+            continue
+        enriched.append(
+            {
+                "check_name": name,
+                "ok": None,
+                "summary": "missing from mart.nightly_verdicts",
+                "dagster_run_id": None,
+                "ran_at": None,
+                "recorded_at": None,
+                "freshness_state": "missing",
+                "age_hours": None,
+                "cadence_hours": cadence_hours,
+                "max_age_hours": round(cadence_hours * 2.0, 2),
+                "expected": True,
+            }
+        )
+    return enriched
+
+
+def _question_dto_from_payload(question_id: str, raw: Any) -> ConstructionQuestionDto:
+    entry = raw if isinstance(raw, dict) else {}
+    answered = int(entry.get("answered", 0) or 0)
+    denominator = int(entry.get("denominator", 0) or 0)
+    not_applicable = int(entry.get("not_applicable", 0) or 0)
+    raw_by_class = entry.get("by_class")
+    by_class: dict[str, Any] = raw_by_class if isinstance(raw_by_class, dict) else {}
+    world_absence = int(entry.get("world_absence", by_class.get("world_absence", 0)) or 0)
+    pipeline_gap = int(entry.get("pipeline_gap", by_class.get("pipeline_gap", 0)) or 0)
+    actionable_raw = entry.get("actionable_denominator")
+    if actionable_raw is not None:
+        actionable_denominator = int(actionable_raw)
+    else:
+        actionable_denominator = max(0, denominator - world_absence)
+    pct_raw = entry.get("actionable_coverage_pct")
+    if pct_raw is not None:
+        actionable_pct: float | None = float(pct_raw)
+    elif actionable_denominator > 0:
+        actionable_pct = round(answered * 100.0 / actionable_denominator, 2)
+    else:
+        actionable_pct = None
+    return ConstructionQuestionDto(
+        question_id=question_id,
+        answered=answered,
+        denominator=denominator,
+        actionable_denominator=actionable_denominator,
+        actionable_coverage_pct=actionable_pct,
+        world_absence=world_absence,
+        pipeline_gap=pipeline_gap,
+        not_applicable=not_applicable,
+    )
+
+
+def _evaluate_criteria_progress(
+    enriched_verdicts: list[dict[str, Any]],
+    *,
+    contract: Any,
+    env: str | None,
+) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    by_name = {str(v.get("check_name") or ""): v for v in enriched_verdicts}
+    scheduled_lanes = {contract.universes[k].lane_name for k in contract.scheduled_universes(env)}
+    counts = {"total": 0, "verified": 0, "partial": 0, "pending": 0, "failed_or_stale": 0}
+    rows: list[dict[str, Any]] = []
+    for criterion in load_goal_criteria().criteria:
+        counts["total"] += 1
+        applicable = [
+            key
+            for key in criterion.verdict_keys
+            if "@" not in key or not scheduled_lanes or key.split("@", 1)[1] in scheduled_lanes
+        ]
+        if criterion.verdict_keys and not applicable:
+            counts["verified"] += 1
+            rows.append(
+                {
+                    "id": criterion.id,
+                    "root": criterion.root,
+                    "tier": criterion.tier,
+                    "status": criterion.status,
+                    "outcome": "not_applicable",
+                    "evidence": f"not scheduled in {env or 'environment'}",
+                }
+            )
+            continue
+        if not applicable:
+            if criterion.status == "backed":
+                counts["verified"] += 1
+                outcome = "verified"
+                evidence = "backed by contract/CI suite"
+            else:
+                outcome = "partial" if criterion.status == "partial" else "pending"
+                counts[outcome] += 1
+                evidence = f"awaiting {criterion.pending_on}" if criterion.pending_on else "unwired"
+            rows.append(
+                {
+                    "id": criterion.id,
+                    "root": criterion.root,
+                    "tier": criterion.tier,
+                    "status": criterion.status,
+                    "outcome": outcome,
+                    "evidence": evidence,
+                }
+            )
+            continue
+        parts: list[str] = []
+        bad = False
+        for key in applicable:
+            v = by_name.get(key)
+            state = str(v.get("freshness_state")) if v is not None else "missing"
+            if state != "pass":
+                bad = True
+                parts.append(f"{key}={state}")
+            else:
+                parts.append(f"{key}=pass")
+        if bad:
+            counts["failed_or_stale"] += 1
+            outcome = "failed_or_stale"
+        elif criterion.status == "partial":
+            counts["partial"] += 1
+            outcome = "partial"
+            if criterion.pending_on:
+                parts.append(f"partial({criterion.pending_on})")
+        elif criterion.status == "pending":
+            counts["pending"] += 1
+            outcome = "pending"
+            if criterion.pending_on:
+                parts.append(f"pending({criterion.pending_on})")
+        else:
+            counts["verified"] += 1
+            outcome = "verified"
+        rows.append(
+            {
+                "id": criterion.id,
+                "root": criterion.root,
+                "tier": criterion.tier,
+                "status": criterion.status,
+                "outcome": outcome,
+                "evidence": "; ".join(parts),
+            }
+        )
+    return counts, rows
+
+
+def _build_construction_progress(
+    cur: Any,
+    *,
+    env: str | None,
+    enriched_verdicts: list[dict[str, Any]],
+    served_heads: list[dict[str, Any]],
+) -> ConstructionProgressDto:
+    contract = load_environment_contract()
+    counts, criteria_rows = _evaluate_criteria_progress(enriched_verdicts, contract=contract, env=env)
+    question_cov = _optional_rows(cur, QUESTION_COVERAGE_SQL, table_check="mart.question_coverage_report")
+    strategy_rows = _optional_rows(cur, STRATEGY_RUN_COUNTS_SQL, table_check="mart.strategy_runs")
+    backtest_rows = _optional_rows(cur, BACKTEST_LATEST_SQL, table_check="mart.backtest_runs")
+
+    head_by_universe: dict[str, dict[str, Any]] = {}
+    for row in served_heads:
+        if (
+            row.get("factor_id") in ("gross_profit_per_employee", None)
+            or row.get("universe_id") not in head_by_universe
+        ):
+            uid = str(row.get("universe_id") or "")
+            if uid:
+                head_by_universe[uid] = row
+
+    cov_by_universe: dict[str, dict[str, Any]] = {
+        str(row.get("universe_id") or ""): row for row in question_cov if row.get("universe_id")
+    }
+    scheduled = set(contract.scheduled_universes(env))
+    universes: list[ConstructionUniverseDto] = []
+    for ukey, urec in contract.universes.items():
+        if urec.is_sentinel:
+            continue
+        matched_uid = next(
+            (uid for uid in head_by_universe if uid.startswith(urec.id_prefix)),
+            next((uid for uid in cov_by_universe if uid.startswith(urec.id_prefix)), None),
+        )
+        head = head_by_universe.get(matched_uid or "", {})
+        cov = cov_by_universe.get(matched_uid or "", {})
+        raw_payload = cov.get("payload")
+        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+        raw_q_map = payload.get("questions")
+        q_map: dict[str, Any] = raw_q_map if isinstance(raw_q_map, dict) else {}
+        questions = [_question_dto_from_payload(str(qid), q_map[qid]) for qid in sorted(q_map)]
+        universes.append(
+            ConstructionUniverseDto(
+                universe_key=ukey,
+                universe_id=matched_uid,
+                scheduled=ukey in scheduled,
+                head_run_id=head.get("head_run_id"),
+                served_run_id=head.get("run_id"),
+                freshness=head.get("freshness"),
+                availability=head.get("availability"),
+                report_matches_head=bool(cov.get("matches_served_head", False)),
+                questions=questions,
+            )
+        )
+
+    return ConstructionProgressDto(
+        environment=env or "unknown",
+        criteria_total=counts["total"],
+        criteria_verified=counts["verified"],
+        criteria_partial=counts["partial"],
+        criteria_pending=counts["pending"],
+        criteria_failed_or_stale=counts["failed_or_stale"],
+        criteria=criteria_rows,
+        universes=universes,
+        strategy_runs=[
+            ConstructionStrategyRunDto(
+                strategy_key=str(r["strategy_key"]),
+                strategy_run_id=str(r["strategy_run_id"]),
+                executed_at=str(r["executed_at"]),
+                selected_count=int(r.get("selected_count") or 0),
+                eligible_count=int(r.get("eligible_count") or 0),
+                total_count=int(r.get("total_count") or 0),
+            )
+            for r in strategy_rows
+        ],
+        backtest_runs=[
+            ConstructionBacktestDto(
+                strategy_key=str(r["strategy_key"]),
+                universe_id=str(r["universe_id"]),
+                status=str(r["status"]),
+                run_id=str(r["run_id"]),
+                executed_at=str(r["executed_at"]),
+                cagr_monthly=r.get("cagr_monthly"),
+                sharpe_daily=r.get("sharpe_daily"),
+            )
+            for r in backtest_rows
+        ],
+    )
+
+
 class OpsOverviewResponse(BaseModel):
     runs: list[OpsRunRowDto] | str = "unavailable"
     data_engine: OpsDataEngineBuildDto | None = None
@@ -220,6 +615,7 @@ class OpsOverviewResponse(BaseModel):
     failed_job_errors: list[dict[str, Any]] = Field(default_factory=list)
     trigger_queue: list[dict[str, Any]] = Field(default_factory=list)
     rollback_requests: list[dict[str, Any]] = Field(default_factory=list)
+    construction_progress: ConstructionProgressDto | None = None
 
 
 class DatahubStatsResponse(BaseModel):
@@ -467,11 +863,19 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
                 }
             )
 
+        env_name = str(getattr(settings, "environment", "") or "").strip() or None
         served_heads = _optional_rows(cur, SERVED_HEADS_SQL)
-        nightly_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
+        raw_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
+        nightly_verdicts = _enrich_nightly_verdicts(raw_verdicts, env=env_name)
         failed_job_errors = _optional_rows(cur, FAILED_JOB_ERRORS_SQL, table_check="dagster.event_logs")
         trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
         rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
+        construction_progress = _build_construction_progress(
+            cur,
+            env=env_name,
+            enriched_verdicts=nightly_verdicts,
+            served_heads=served_heads,
+        )
 
         return OpsOverviewResponse(
             runs=runs,
@@ -483,6 +887,7 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
             failed_job_errors=failed_job_errors,
             trigger_queue=trigger_queue,
             rollback_requests=rollback_requests,
+            construction_progress=construction_progress,
         )
 
     return with_ops_reader(_q, database_url=database_url)
@@ -595,7 +1000,8 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "select artifact_key, lane, schedule_name, universe_like, family, served_to, wired "
             "from mart.served_artifact order by lane, artifact_key",
         )
-        nightly_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
+        env_name = str(getattr(settings, "environment", "") or "").strip() or None
+        nightly_verdicts = _enrich_nightly_verdicts(_optional_rows(cur, NIGHTLY_VERDICTS_SQL), env=env_name)
         output_invariants = _optional_rows(
             cur,
             """

@@ -40,7 +40,7 @@ def test_goal_criteria_catalog_validates() -> None:
 )
 def test_a_malformed_criterion_is_refused(change: dict, message: str) -> None:
     criteria = _payload()["criteria"]
-    target = next(c for c in criteria if c["id"] == "R3.C5")
+    target = next(c for c in criteria if c["id"] == "R3.C6")
     target.update(change)
     with pytest.raises(ValidationError, match=message):
         _with(criteria)
