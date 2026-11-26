@@ -40,8 +40,13 @@ the last settled session (#637) — UNADJUSTED (`AuType.NONE`) and regular-sessi
 cutoff (#535). It is fused by `market-price-fusion:v3` with priority yahoo, twelve-data,
 moomoo at the unchanged 0.3% tolerance; a disagreeing origin still abstains the cell. The
 same order is the failover order (#862): a cell Yahoo cannot serve is served by Twelve
-Data's settled close for the target session, else moomoo's, one confidence grade down
-(0.85 -> 0.75, 0.80 -> 0.70) — see `docs/datahub-quality-report.md`, "Primary failover".
+Data's settled close for the target session, else moomoo's, applying a 0.90 conformance factor
+inside the continuous calibration model (banded in `confidence_bands.v1.json` at `>= 0.80` high,
+`>= 0.60` medium) — see `docs/datahub-quality-report.md`, "Primary failover".
+
+Corporate-action validation (`common/factors/src/factors/backtest/corporate_actions.py`) detects
+non-split price jumps using `max(|ln(step)| / 2, 0.06)` so ordinary spin-offs or ex-dividend moves
+under 6% do not trigger false exclusions when `step > 1`.
 
 The SDK speaks protobuf and returns DataFrames, so the landed bytes are the decoded bars
 in canonical JSON under raw/moomoo/ in object storage, and the parser identity (`moomoo-kline-parser:v1`)

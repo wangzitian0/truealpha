@@ -1359,3 +1359,55 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
             f"{environment} day {day_start.date()}: non-core Twelve Data demand {non_core_calls} "
             f"exceeds allowance {allowance_after_core} left after core ({core_calls}/{capacity.daily_budget})"
         )
+
+
+def test_qqq_prices_separates_404_unavailable_from_failed_and_deprioritizes_unavailable(monkeypatch) -> None:
+    from datetime import date
+
+    from data_engine.datahub.market_prices import TwelveDataApiError
+    from data_engine.lanes import qqq_prices
+
+    ordered = qqq_prices.refresh_order(
+        ["WBD", "AAPL", "MSFT", "EA"],
+        {"MSFT": date(2026, 11, 20)},
+        unavailable={"EA", "WBD"},
+    )
+    assert ordered == ["AAPL", "MSFT", "EA", "WBD"]
+
+    budget = qqq_prices.CreditBudget(share=100, ceiling=80, reserve=0, spent_today=0, need=10, credits=20)
+    outcome = qqq_prices.RefreshOutcome(environment="staging", targets=2, budget=budget, planned=("EA", "OKSYM"))
+
+    class _FakeClient:
+        call_count = 0
+
+    def _fake_ingest(symbol: str, **_k) -> dict[str, int]:
+        _FakeClient.call_count += 2
+        if symbol == "EA":
+            raise TwelveDataApiError(
+                "Twelve Data error 404: This symbol is available starting with the Pro or Venture plan"
+            )
+        return {"splits": 1}
+
+    monkeypatch.setattr(qqq_prices, "ingest_daily_series", _fake_ingest)
+    qqq_prices._fetch(
+        outcome,
+        connection=None,  # type: ignore[arg-type]
+        client=_FakeClient(),  # type: ignore[arg-type]
+        now=datetime(2026, 11, 26, tzinfo=UTC),
+        commit=lambda: None,
+    )
+    assert outcome.failed == {}
+    assert "EA" in outcome.unavailable
+    assert outcome.stored == ["OKSYM"]
+
+
+def test_standard_history_schedule_filters_to_scheduled_universes(monkeypatch) -> None:
+    from data_engine.lanes import standards
+
+    monkeypatch.setattr(standards, "scheduled_universe_names", lambda: ("topt", "universe-list:qqq"))
+    tick = datetime(2026, 11, 23, 9, 7, tzinfo=UTC)
+    context = dg.build_schedule_context(scheduled_execution_time=tick)
+    reqs = list(standards.standard_history_schedule.evaluate_tick(context).run_requests)
+    universes = [r.run_config["ops"]["run_standard_history"]["config"]["universe"] for r in reqs]
+    assert sorted(universes) == ["topt", "universe-list:qqq"]
+    assert "universe-list:sp500" not in universes

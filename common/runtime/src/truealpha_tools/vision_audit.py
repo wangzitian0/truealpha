@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.error
+import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import infra2_sdk.delivery as _sdk_delivery
 from data_engine.environment_universes import scheduled_universe_names
 from infra2_sdk.delivery import default_http_get
 from truealpha_contracts.environment_contract import load_environment_contract
@@ -17,16 +20,35 @@ from truealpha_contracts.goal_criteria import load_goal_criteria
 
 from truealpha_tools.nightly_verdicts import EXPECTATIONS_PATH, HealthReport, parse_expectations, read_report
 
+_SDK_DEFAULT_HTTP_GET = _sdk_delivery.default_http_get
+_AUDIT_USER_AGENT = "truealpha-ops-audit/1.0"
+
 
 def _health_url_for(env: str) -> str:
     tier = env.strip().lower()
-    host = "truealpha.club" if tier in {"prod", "production"} else f"{tier}.truealpha.club"
+    if tier in {"prod", "production"}:
+        host = "truealpha.club"
+    elif tier == "staging":
+        host = "truealpha-staging.truealpha.club"
+    else:
+        host = f"{tier}.truealpha.club"
     return f"https://{host}/api/health"
 
 
 def _http_get(url: str) -> tuple[int, str]:
-    status, body = default_http_get(url, 15.0)
-    return status, body.decode("utf-8", errors="replace")
+    if _sdk_delivery.default_http_get is not _SDK_DEFAULT_HTTP_GET:
+        status, body = _sdk_delivery.default_http_get(url, 15.0)
+        return status, body.decode("utf-8", errors="replace")
+    if default_http_get is not _SDK_DEFAULT_HTTP_GET:
+        status, body = default_http_get(url, 15.0)
+        return status, body.decode("utf-8", errors="replace")
+    req = urllib.request.Request(url, method="GET", headers={"User-Agent": _AUDIT_USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=15.0) as resp:  # noqa: S310
+            return int(resp.status), resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        return int(exc.code), body.decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True)

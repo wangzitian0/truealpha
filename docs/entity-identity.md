@@ -556,6 +556,8 @@ holding type.
      frozen as evidence, then dropped in #1730.
    - Add the graph and embedding export jobs.
 
+- `mart.issuer_basic_info`: joins `staging.issuer_profiles` to `mart.issuer_universe_latest` by `issuer_id` with CIK fallback (`regexp_replace` + zero-padded `cik`) and `distinct on` deduplication ordered by complete profile fields and `updated_at desc`, keeping `source_fetch_id` linked to `raw.fetches` (`20261126T0958_datahub_issuer_basic_info_dedup.sql`).
+
 ## 11. Standing checks
 
 | check | where it lives |
