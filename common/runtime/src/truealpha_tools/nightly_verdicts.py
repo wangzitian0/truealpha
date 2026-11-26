@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from infra2_sdk.config import resolve_tier
+from infra2_sdk.delivery import default_http_get as _SDK_DEFAULT_HTTP_GET
 
 HttpGet = Callable[[str], tuple[int, str]]
 GitRun = Callable[..., subprocess.CompletedProcess[str]]
@@ -338,10 +339,21 @@ def judge(
 
 
 def _default_http_get(url: str) -> tuple[int, str]:
-    from infra2_sdk.delivery import default_http_get
+    import urllib.error
+    import urllib.request
 
-    status, body = default_http_get(url, 15.0)
-    return status, body.decode("utf-8", errors="replace")
+    import infra2_sdk.delivery as _sdk_delivery
+
+    if _sdk_delivery.default_http_get is not _SDK_DEFAULT_HTTP_GET:
+        status, body = _sdk_delivery.default_http_get(url, 15.0)
+        return status, body.decode("utf-8", errors="replace")
+    req = urllib.request.Request(url, method="GET", headers={"User-Agent": "truealpha-ops-audit/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15.0) as resp:  # noqa: S310
+            return int(resp.status), resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        return int(exc.code), body.decode("utf-8", errors="replace")
 
 
 def check_nightly_verdicts(

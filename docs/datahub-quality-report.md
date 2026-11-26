@@ -102,8 +102,8 @@ close of the target's settled session. The first that has it serves the cell:
 - declared: the payload carries `served_by_failover: "<origin>"`, and the obligation result
   carries `served_by_failover` beside the primary's reason codes (the attempts keep the
   primary's failure; the terminal attempt is `success` with the primary's reason);
-- one grade lower: the origin's normal confidence minus the 0.10 step a session of lag
-  costs (Twelve Data 0.85 -> 0.75, moomoo 0.80 -> 0.70), floored at 0.50;
+- attenuated by a 0.90 sample-conformance factor under the continuous calibration model
+  (display bands in `confidence_bands.v1.json`: `>= 0.80` high, `>= 0.60` medium, `< 0.60` low);
 - only for the same session, knowable by the run's cutoff instant: another day's close, or
   one knowable after the cutoff, cannot serve. Without a market calendar a holiday tick's
   target session has no bar at any origin, so a primary failure on a holiday still leaves
