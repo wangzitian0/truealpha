@@ -75,7 +75,7 @@ grant usage on schema app to app_audit_reader;
 grant select on app.conversation_audit_metadata to app_audit_reader;
 grant select on app.document_audit_metadata to app_audit_reader;
 
--- Scoped runtime login for app-web + llm-service (#432). Since Stage B both containers'
+-- Scoped runtime login for llm-service (#432, #1716; app-web is zero-DB).
 -- DATABASE_URL logs in as this role (llm_service.config DEFAULT_DATABASE_URL). Migrations
 -- keep using the superuser via MIGRATIONS_DATABASE_URL (db/apply_migrations.sh), never this role.
 do $$ begin
