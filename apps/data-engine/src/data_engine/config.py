@@ -1,7 +1,7 @@
 from typing import Literal
 
-from infra2_sdk.runtime.environment import RuntimeEnvKey
-from infra2_sdk.runtime.llm import LlmSettings
+from infra2_sdk.config import RuntimeEnvKey
+from infra2_sdk.llm import LlmSettings
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings, database_url_field
 from truealpha_runtime.config import _schema_field as _f
@@ -55,7 +55,7 @@ class Settings(RuntimeSettings):
     dagster_postgres_url: str = _f("", "runtime", "dagster", empty_ok=True, sensitive=True)
     # The compose gives the webserver role this port; the image CMD uses 3001 (Dockerfile).
     dagster_webserver_port: int = _f(3001, "code", "dagster")
-    # infra2_sdk.runtime.otel.init_worker reads these three names itself (dagster_defs.py).
+    # infra2_sdk.telemetry.init_worker reads these three names itself (dagster_defs.py).
     # An empty endpoint keeps telemetry off. The service name defaults to "truealpha".
     otel_exporter_otlp_endpoint: str = _f("", "code", "otel", empty_ok=True)
     otel_service_name: str = _f("truealpha", "code", "otel")

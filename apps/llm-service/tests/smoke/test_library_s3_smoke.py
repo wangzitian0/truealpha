@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from infra2_sdk.runtime.s3 import create_s3_client, ensure_bucket, read_object_bytes
+from infra2_sdk.storage import create_s3_client, ensure_bucket, read_object_bytes
 from llm_service.config import settings
 from llm_service.main import app
 from llm_service.mcp_server import build_mcp_server
@@ -26,12 +26,16 @@ pytestmark = [pytest.mark.deps, pytest.mark.smoke]
 
 
 def _ensure_smoke_s3_bucket() -> Any:
-    s3_settings = settings.to_s3_settings()
-    if not (s3_settings.endpoint_url or "").strip():
+    if (
+        not (settings.s3_endpoint or "").strip()
+        or not settings.s3_access_key.strip()
+        or not settings.s3_secret_key.get_secret_value().strip()
+    ):
         skip_or_fail("S3_ENDPOINT is unset; CI runs the live S3 smoke test")
+    s3_settings = settings.to_s3_settings()
     client = create_s3_client(s3_settings)
     try:
-        ensure_bucket(s3_settings, client=client, allow_create=True)
+        ensure_bucket(client, s3_settings.bucket, s3_settings.region)
     except Exception as exc:  # noqa: BLE001
         skip_or_fail(f"no reachable object storage; CI runs the integration tests ({exc})")
     return client

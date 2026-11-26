@@ -9,11 +9,11 @@ dependencies = [
     "pydantic-settings>=2.2.0",
     "truealpha-contracts",
     # S3RawObjectStore's client construction (bucket/endpoint/credential validation)
-    # via infra2_sdk.runtime.s3 — boto3 above already satisfies its optional-dependency
-    # check. The `otel` extra is the OTLP/HTTP exporter stack of infra2_sdk.runtime.otel
+    # via infra2_sdk.storage — boto3 above already satisfies its optional-dependency
+    # check. The `telemetry` extra is the OTLP/HTTP exporter stack of infra2_sdk.telemetry
     # (#1034); it ships in every service image because every Python service starts
     # telemetry through it (init_service or init_worker).
-    "infra2-sdk[http,otel,pydantic-ai] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl",
+    "infra2-sdk[http,telemetry,llm] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.11.2/infra2_sdk-4.11.2-py3-none-any.whl",
 ]
 
 [project.scripts]

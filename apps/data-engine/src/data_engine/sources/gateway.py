@@ -19,9 +19,8 @@ from decimal import Decimal
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, NoReturn, TypeVar
 
-from infra2_sdk.capacity import RateLimitWindow
-from infra2_sdk.runtime.http import request_with_retry
-from infra2_sdk.runtime.llm import redact_uri as _sdk_redact_uri
+from infra2_sdk.service import RateLimitWindow, request_with_retry
+from infra2_sdk.storage import redact_presigned_url as _sdk_redact_uri
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
 from data_engine import db
@@ -524,13 +523,13 @@ class CapacityGate:
         while True:
             shared_wait = self._shared_window_wait(seats, window, calls)
             allowed = False
-            if shared_wait > 0 and tracker.used < calls:
+            if shared_wait > 0:
                 wait = shared_wait
             else:
                 allowed, local_wait = tracker.acquire()
-                if allowed and shared_wait <= 0:
+                if allowed:
                     return waited
-                wait = max(0.0 if allowed else local_wait, shared_wait)
+                wait = local_wait
             if waited + wait > self.max_wait_seconds:
                 _refuse(
                     CapacityExceeded(
@@ -698,6 +697,7 @@ def _http_request(
         retry_statuses=retry_statuses,
         backoff_base=backoff_base,
         max_backoff=max_backoff,
+        retry_non_idempotent=kwargs.pop("retry_non_idempotent", max_attempts > 1),
         sleep=sleep,
         **kwargs,
     )

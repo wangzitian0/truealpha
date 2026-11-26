@@ -1005,27 +1005,34 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "4.9.0"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl" }
+version = "4.11.2"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.11.2/infra2_sdk-4.11.2-py3-none-any.whl" }
 dependencies = [
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
+    { name = "pydantic", version = "2.14.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl", hash = "sha256:59a77992b7db796016b6fdda49e2ea67b110a0cd9fed3dddf9a3bf1423f8dbb4" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.11.2/infra2_sdk-4.11.2-py3-none-any.whl", hash = "sha256:73c1cd308e47990cddc8c69bb9b7819c9312f0824c1d6ee8eada5e3bcb7a9b2b" },
 ]
 
 [package.optional-dependencies]
 http = [
     { name = "httpx" },
 ]
-otel = [
+llm = [
+    { name = "httpx" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation-logging" },
     { name = "opentelemetry-sdk" },
-]
-pydantic-ai = [
     { name = "pydantic-ai-slim", extra = ["zai"] },
+]
+telemetry = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-logging" },
+    { name = "opentelemetry-sdk" },
 ]
 
 [package.metadata]
@@ -1039,31 +1046,36 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.162,<1" },
     { name = "httpx", marker = "extra == 'all'", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'fastapi'", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.27,<1" },
     { name = "opentelemetry-api", marker = "extra == 'all'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-api", marker = "extra == 'dev'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-api", marker = "extra == 'fastapi'", specifier = ">=1.24,<2" },
-    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-api", marker = "extra == 'llm'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-api", marker = "extra == 'telemetry'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'all'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'dev'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'fastapi'", specifier = ">=1.24,<2" },
-    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'llm'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'telemetry'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-instrumentation-logging", marker = "extra == 'all'", specifier = ">=0.45b0,<1" },
     { name = "opentelemetry-instrumentation-logging", marker = "extra == 'dev'", specifier = ">=0.45b0,<1" },
     { name = "opentelemetry-instrumentation-logging", marker = "extra == 'fastapi'", specifier = ">=0.45b0,<1" },
-    { name = "opentelemetry-instrumentation-logging", marker = "extra == 'otel'", specifier = ">=0.45b0,<1" },
+    { name = "opentelemetry-instrumentation-logging", marker = "extra == 'llm'", specifier = ">=0.45b0,<1" },
+    { name = "opentelemetry-instrumentation-logging", marker = "extra == 'telemetry'", specifier = ">=0.45b0,<1" },
     { name = "opentelemetry-sdk", marker = "extra == 'all'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.24,<2" },
     { name = "opentelemetry-sdk", marker = "extra == 'fastapi'", specifier = ">=1.24,<2" },
-    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-sdk", marker = "extra == 'llm'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-sdk", marker = "extra == 'telemetry'", specifier = ">=1.24,<2" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'all'", specifier = ">=3.2,<4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.2,<4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2,<4" },
-    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.7,<3" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pydantic-ai-slim", extras = ["zai"], marker = "extra == 'all'", specifier = ">=2.71.0,<3" },
     { name = "pydantic-ai-slim", extras = ["zai"], marker = "extra == 'dev'", specifier = ">=2.71.0,<3" },
-    { name = "pydantic-ai-slim", extras = ["zai"], marker = "extra == 'pydantic-ai'", specifier = ">=2.71.0,<3" },
-    { name = "pydantic-settings", marker = "extra == 'dev'", specifier = ">=2.2,<3" },
+    { name = "pydantic-ai-slim", extras = ["zai"], marker = "extra == 'llm'", specifier = ">=2.71.0,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23,<2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<8" },
@@ -1071,7 +1083,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
 ]
-provides-extras = ["s3", "postgres", "otel", "http", "fastapi", "pydantic-ai", "all", "dev"]
+provides-extras = ["telemetry", "http", "fastapi", "postgres", "s3", "llm", "all", "dev"]
 
 [[package]]
 name = "iniconfig"
@@ -3264,7 +3276,7 @@ version = "0.1.0"
 source = { editable = "common/runtime" }
 dependencies = [
     { name = "boto3" },
-    { name = "infra2-sdk", extra = ["http", "otel", "pydantic-ai"] },
+    { name = "infra2-sdk", extra = ["http", "llm", "telemetry"] },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "truealpha-contracts" },
@@ -3280,7 +3292,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["http", "otel", "pydantic-ai"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http", "telemetry", "llm"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.11.2/infra2_sdk-4.11.2-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "common/contracts" },

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from botocore.exceptions import ClientError
-from infra2_sdk.runtime.s3 import S3Settings
+from infra2_sdk.storage import S3Settings
 from truealpha_contracts.models import DataSource, RawCapture
 from truealpha_runtime import (
     DEPENDENCY_MANIFEST,
@@ -60,7 +60,7 @@ def test_environment_resolution_is_explicit():
     ],
 )
 def test_runtime_accepts_the_shared_sdk_environment_vocabulary(value, expected):
-    from infra2_sdk.runtime.environment import EnvironmentTier as SDKEnvironmentTier
+    from infra2_sdk.config import EnvironmentTier as SDKEnvironmentTier
 
     assert resolve_environment_tier(value) is SDKEnvironmentTier(expected)
     assert DEPENDENCY_MANIFEST.required_for(resolve_environment_tier(value)) == {
@@ -122,12 +122,18 @@ def test_runtime_settings_converts_to_s3_settings():
         environment="test",
         database_url="postgresql://user:pass@127.0.0.1:5432/testdb",
         s3_bucket="my-bucket",
+        s3_endpoint="http://localhost:9000",
+        s3_access_key="s3local",
+        s3_secret_key="s3_local_secret",
     )
     s3 = settings.to_s3_settings()
     assert s3.bucket == "my-bucket"
     assert settings.s3_raw_prefix == "raw"
-    assert s3.addressing_style == "path"
+    assert s3.use_path_style is True
     assert isinstance(s3, S3Settings)
+
+    with pytest.raises(ValueError, match="S3_ENDPOINT"):
+        RuntimeSettings(_env_file=None, environment="test", s3_endpoint=None).to_s3_settings()
 
 
 def test_s3_raw_object_store_and_check_refuse_blank_endpoint():
@@ -164,24 +170,29 @@ def test_s3_raw_object_store_and_check_refuse_blank_endpoint():
 
 
 def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
-    """S3RawObjectStore.__init__ builds its client through infra2_sdk.runtime.s3 from
-    resolved RuntimeSettings values. It forces addressing_style="path" because the local
-    S3 engine requires path-style routing and S3Settings defaults addressing_style to None."""
-    settings = RuntimeSettings(_env_file=None, environment="test")
+    """S3RawObjectStore builds its client through infra2_sdk.storage from
+    resolved RuntimeSettings values with use_path_style=True for the local S3 engine."""
+    settings = RuntimeSettings(
+        _env_file=None,
+        environment="test",
+        s3_endpoint="http://localhost:9000",
+        s3_access_key="s3local",
+        s3_secret_key="s3_local_secret",
+    )
 
     store = S3RawObjectStore(settings)
 
     assert store.client.meta.config.s3["addressing_style"] == "path"
     assert store.client.meta.endpoint_url == settings.s3_endpoint
     assert store.client.meta.region_name == settings.s3_region
-    assert store.s3_settings.addressing_style == "path"
+    assert store.s3_settings.use_path_style is True
 
 
 def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
-    from infra2_sdk.runtime.environment import runtime_env_contract
+    from infra2_sdk.config import shared_env_contract
     from truealpha_runtime.testing import run_python_probe
 
-    contract_keys = sorted({item["name"] for item in runtime_env_contract()["variables"]})
+    contract_keys = sorted({item["name"] for group in shared_env_contract()["groups"].values() for item in group})
     for key in contract_keys:
         monkeypatch.setenv(key, f"ambient-{key}")
     monkeypatch.setenv("OTEL_CUSTOM_AMBIENT", "ambient-otel")

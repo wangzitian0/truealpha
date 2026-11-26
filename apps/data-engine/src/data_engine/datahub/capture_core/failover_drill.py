@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from infra2_sdk.runtime.environment import EnvironmentTier, resolve_environment_tier
+from infra2_sdk.config import EnvironmentTier, resolve_tier
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.datahub.capture_core.source_registrations import TWELVE_DATA_ORIGIN
@@ -41,7 +41,10 @@ class DrillRefused(ValueError):
 
 
 def is_production(environment: str) -> bool:
-    return resolve_environment_tier(environment, unknown="production") is EnvironmentTier.PRODUCTION
+    try:
+        return resolve_tier(environment) is EnvironmentTier.PRODUCTION
+    except ValueError:
+        return True
 
 
 @dataclass(frozen=True)

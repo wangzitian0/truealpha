@@ -3,7 +3,7 @@
 import logging
 
 import dagster as dg
-from infra2_sdk.runtime.otel import init_worker
+from infra2_sdk.telemetry import init_worker
 
 from data_engine.config import settings
 from data_engine.lanes import LANE_MODULES, lane_definitions

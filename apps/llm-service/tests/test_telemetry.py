@@ -125,7 +125,7 @@ def test_with_an_endpoint_but_without_the_identity_the_app_refuses_to_import(mis
     environ = {key: value for key, value in DEPLOYED.items() if key != missing}
     result = run_python_probe(STATE_PROBE, {**environ, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
     assert result.returncode != 0, "the service started and would have exported untagged telemetry"
-    assert "requires ServiceIdentity attributes when an OTLP endpoint is set" in result.stderr
+    assert "telemetry requires issued identity attributes when OTLP endpoint is set" in result.stderr
     assert named in result.stderr
     assert IAC_REF not in result.stderr, "names only, never values"
 
@@ -172,7 +172,7 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
 
 
 METRIC_PROBE = """
-from infra2_sdk.runtime.otel import init_worker
+from infra2_sdk.telemetry import init_worker
 
 providers = init_worker("truealpha", strict=True, require_issued_identity=True)
 meter = providers.meter_provider.get_meter("probe")

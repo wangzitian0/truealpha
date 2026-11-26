@@ -7,7 +7,7 @@
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m infra2_sdk.delivery poll --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --timeout-seconds 120 --interval-seconds 5"
       ],
       "needs": [
         "running_service"
@@ -21,7 +21,7 @@
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m infra2_sdk.delivery poll --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --timeout-seconds 60 --interval-seconds 5"
       ],
       "needs": [
         "running_service"

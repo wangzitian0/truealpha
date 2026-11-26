@@ -42,18 +42,12 @@ jobs:
       - run: make lint
       - run: make typecheck-python
       - run: make contract-conformance
-      # #759 environment manifests & hooks: validated directly via infra2_sdk.manifests.
+      # #759 environment manifests & hooks: validated directly via infra2_sdk.config and infra2_sdk.delivery.
       - run: |
-          uv run python -c '
-          from pathlib import Path
-          from infra2_sdk import manifests
-          specs = (
-              manifests.ManifestSpec("apps/data-engine/required-env.generated.json", "data_engine.config:Settings", source="apps/data-engine"),
-              manifests.ManifestSpec("apps/llm-service/required-env.generated.json", "llm_service.config:Settings", source="apps/llm-service"),
-          )
-          raise SystemExit(manifests.main(["--check"], root=Path("."), specs=specs, hand_written=("apps/app-web/required-env.manifest.json",)))
-          '
-          uv run python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json
+          uv run python -m infra2_sdk.config check data_engine.config:Settings --source apps/data-engine --json apps/data-engine/required-env.generated.json
+          uv run python -m infra2_sdk.config check llm_service.config:Settings --source apps/llm-service --json apps/llm-service/required-env.generated.json
+          uv run python -c 'from infra2_sdk.config import EnvironmentManifest; errs = EnvironmentManifest.from_file("apps/app-web/required-env.manifest.json").validate_offline(); assert not errs, errs'
+          uv run python -m infra2_sdk.delivery check-hooks runtime-hooks.manifest.json
 
   test-s3:
     runs-on: ubuntu-latest

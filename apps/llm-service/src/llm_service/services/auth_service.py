@@ -12,7 +12,7 @@ from typing import Literal
 
 import bcrypt
 import jwt
-from infra2_sdk.capacity import RateLimitWindow
+from infra2_sdk.service import RateLimitWindow
 from pydantic import BaseModel
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 
@@ -60,7 +60,7 @@ class LogoutResponse(BaseModel):
 
 
 class LoginRateLimiter:
-    """Per-key sliding-window attempt limiter backed by `infra2_sdk.capacity.RateLimitWindow`."""
+    """Per-key sliding-window attempt limiter backed by `infra2_sdk.service.RateLimitWindow`."""
 
     def __init__(self, max_attempts: int = 10, window_seconds: int = 300, *, now: Callable[[], float] | None = None):
         self._limit = max_attempts

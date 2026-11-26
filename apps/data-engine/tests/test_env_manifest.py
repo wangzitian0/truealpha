@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 from data_engine.config import Settings
-from infra2_sdk.runtime.environment import RuntimeEnvKey
+from infra2_sdk.config import RuntimeEnvKey
 
 pytestmark = pytest.mark.contract
 
 APP_DIR = Path(__file__).resolve().parents[1]
 MANIFEST = APP_DIR / "required-env.generated.json"
 
-#: The names that `infra2_sdk.runtime.otel.init_worker` reads in `data_engine.dagster_defs`.
+#: The names that `infra2_sdk.telemetry.init_worker` reads in `data_engine.dagster_defs`.
 OTEL_NAMES = (
     RuntimeEnvKey.OTEL_EXPORTER_OTLP_ENDPOINT.value,
     RuntimeEnvKey.SERVICE_NAME.value,
