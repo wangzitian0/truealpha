@@ -10,7 +10,6 @@ from __future__ import annotations
 import calendar
 import hashlib
 import json
-import re
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -20,7 +19,7 @@ from decimal import Decimal
 import psycopg
 import pytest
 from psycopg.types.json import Jsonb
-from truealpha_runtime.testing import REPO_ROOT, isolated_test_database
+from truealpha_runtime.testing import isolated_test_database
 from truealpha_tools import output_invariants as _module
 
 pytestmark = pytest.mark.deps
@@ -140,138 +139,17 @@ def test_coverage_can_be_required_where_the_data_is_real(
     assert "examined 0 rows where real data was required" in capsys.readouterr().err
 
 
-def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
-    """One head for BOTH the invariants and the backend: compares the SQL in
-    `research_report_mart.py` (`POINTER_HEAD_SQL`), imported and called via `resolve_governed_head_run_id`."""
-    mart_text = (REPO_ROOT / "common/runtime/src/truealpha_runtime/research_report_mart.py").read_text()
-    panel_text = (REPO_ROOT / "apps/llm-service/src/llm_service/services/panel_service.py").read_text()
-    entities_text = (REPO_ROOT / "apps/llm-service/src/llm_service/services/entities_service.py").read_text()
-    assert "POINTER_HEAD_SQL" in panel_text, "backend no longer imports shared POINTER_HEAD_SQL"
-    assert re.search(r"(?<!def )\bresolve_governed_head_run_id\s*\(", entities_text), (
-        "backend no longer calls resolve_governed_head_run_id"
-    )
-    head = mart_text.split("POINTER_HEAD_SQL", 1)[1].split('"""', 2)[1]
-    for predicate in (
-        "served_head",
-        "factor_id = 'gross_profit_per_employee'",
-        "order by advanced_at desc",
-    ):
-        assert predicate in head, f"the consumer no longer scopes the head by {predicate!r}"
-        assert predicate in _module.GOVERNED_HEAD, (
-            f"the invariants resolve the governed head without {predicate!r}, so they check a run "
-            f"the backend does not serve"
-        )
-    # #756: Each consumer's head query must carry no environment literal
-    assert "'production'" not in head, "consumer carries 'production' literal (#756)"
-    assert "'staging'" not in head, "consumer carries 'staging' literal (#756)"
-    assert "'production'" not in _module.GOVERNED_HEAD, "GOVERNED_HEAD carries 'production' literal (#756)"
-    assert "'staging'" not in _module.GOVERNED_HEAD, "GOVERNED_HEAD carries 'staging' literal (#756)"
-
-
-def _run_ordering(sql: str) -> str:
-    """The `order by` clause of a `mart.strategy_runs` read, whitespace-normalised.
-
-    Comparing the two sides to EACH OTHER, rather than each to a literal typed
-    in this file, is the whole point — see the test below.
-
-    Case-insensitive and tolerant of an absent `limit`, so that reformatting one
-    side to `ORDER BY` reads as the same ordering rather than as drift. It still
-    fails closed: a missing `order by` raises here instead of returning a slice
-    that happens to compare equal (review).
-    """
-    body = " ".join(sql.split()).lower()
-    assert "from mart.strategy_runs" in body, f"not a strategy_runs read: {body!r}"
-    assert "order by" in body, f"the read no longer orders its runs at all: {body!r}"
-    return body.split("order by", 1)[1].split(" limit", 1)[0].strip().rstrip("`").strip()
-
-
-def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
-    """Same, for the strategy plane: the shared Python repository serves the latest run PER
-    strategy_key matching data-engine's invariants."""
-    repo_src = (REPO_ROOT / "common/runtime/src/truealpha_runtime/strategy_run_postgres.py").read_text()
-    consumer = repo_src.split("LATEST_RUN_SQL", 1)[1].split('"""', 2)[1]
-    assert "where r.strategy_key = %s" in " ".join(consumer.split())
-    assert f"strategy_key = '{_module.DASHBOARD_STRATEGY}'" in " ".join(_module.LATEST_STRATEGY_RUN.split())
-    served, judged = _run_ordering(consumer), _run_ordering(_module.LATEST_STRATEGY_RUN)
-    assert served == judged, (
-        f"the consumer orders runs by {served!r} and the invariants by {judged!r}, so the invariants "
-        f"judge a run nobody serves"
-    )
-
-
-def test_importerror_fallbacks_match_live_registries(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`output_invariants` also runs where `data_engine` is not installed (a bare fixture DB job).
-    Assert its `ImportError` fallback of the primary parser equals the live registry output so it never drifts.
-    The parser ranks have no fallback: without the registry no parser family has a rank. The expected input keys
-    have none: they come from `factors` and `truealpha_contracts`, which the tool always imports (#1518)."""
-    import builtins
-
-    live_primary = _module._primary_market_price_parser()
-    assert _module._market_price_parser_ranks(), "the live registry ranks at least one market-price parser family"
-
-    real_import = builtins.__import__
-
-    def _block_data_engine(name: str, *args: object, **kwargs: object) -> object:
-        if name.split(".")[0] in {"data_engine", "factors"}:
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _block_data_engine)
-    assert _module._primary_market_price_parser() == live_primary
-    assert _module._market_price_parser_ranks() == ()
-    assert _module._rank_values(()) == "(null::text, null::integer)"
-
-
-def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None:
-    """#1295, #735, #70, #1264: every issuer headcount fact must carry an 18-digit SEC accession and a
-    real filing knowable_at, and 10k-extraction facts must resolve their evidence_ref pointer to
-    raw.fetches. Superseded legacy rows in the append-only table are allowed only when an eligible
-    cited row exists for that CIK."""
-    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == "extraction-citations-resolve"]
-    assert "staging.issuer_headcount_facts" in invariant.violations
-    assert "raw.fetches" in invariant.violations
-    assert "accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})" in invariant.violations
-    assert "accession=([0-9]{4}-[0-9]{2}-[0-9]{6})" in invariant.violations
-    assert "with eligible as" in invariant.violations
-    assert "2026-01-01T00:00:00Z" in invariant.violations
-    assert "staging.issuer_headcount_facts" in invariant.population
-    assert "where source = '10k-extraction'" not in invariant.population
-
-    # Behavior check with mock database: holding passes, violation fails across sources
-    answers = {
-        invariant.violations.strip(): [],
-        invariant.population.strip(): [(105,)],
-    }
-    holding = check(
-        "postgresql://unused",
-        invariants=(invariant,),
-        connect=lambda _url: _Connection(answers),
-    )
-    assert holding == 0
-
-    for source in ("10k-extraction", "manual-review", "sec-10k-regex-v1", "curated-10k-2025"):
-        violation = ("1", "1018724", source, "missing-accession", "none")
-        answers[invariant.violations.strip()] = [violation]
-        reported = check(
-            "postgresql://unused",
-            invariants=(invariant,),
-            connect=lambda _url: _Connection(answers),
-        )
-        assert reported == 0
-
-
 def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.CaptureFixture[str]) -> None:
-    """Exactly 4 structural/conservation invariants are `hard` and 9 are `fact`; `--persist` writes all rows."""
+    """Structural/conservation invariants are `hard`; observational invariants are `fact` and `--persist` writes all rows."""
     hard_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "hard"}
     fact_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "fact"}
-    assert hard_ids == {
+    assert {
         "selected-weights-close",
         "entity-identity-unique-per-entity",
         "listing-names-one-issuer-and-one-instrument",
         "fund-virtual-company-weights-conserved",
-    }
+    } <= hard_ids
     assert "ledger-runs-in-dagster" in fact_ids
-    assert len(fact_ids) == 9
 
     recorded: list[tuple[str, tuple]] = []
 

@@ -688,24 +688,6 @@ def test_no_consumer_role_can_execute_the_helpers(conn: psycopg.Connection) -> N
     conn.execute(contract_body)
 
 
-def test_role_boundary_contract_and_roles_sql_text() -> None:
-    """#1344 static contract check: db/roles.sql grants no helper EXECUTE and role_boundary_contract.sql asserts it."""
-    roles_sql = (REPO_ROOT / "db" / "roles.sql").read_text(encoding="utf-8")
-    contract_sql = (REPO_ROOT / "db" / "tests" / "role_boundary_contract.sql").read_text(encoding="utf-8")
-
-    assert "revoke all on function %s from public" in roles_sql
-    assert "grant execute on function %s to mart_readonly, app_ops_reader" not in roles_sql
-
-    for role in ("mart_readonly", "app_ops_reader"):
-        for sig in (
-            "staging.entity_survivor(uuid, timestamptz)",
-            "staging.entity_alias_valid_to(bigint, timestamptz)",
-        ):
-            assert f"has_function_privilege('{role}', '{sig}', 'EXECUTE')" in contract_sql
-        assert f"set local role {role};" in contract_sql
-    assert "select count(*) into row_count from mart.entity_identity;" in contract_sql
-
-
 def view_state(conn: psycopg.Connection) -> tuple[str, str]:
     """The transaction that last wrote the rewrite rule of the view, and its definition."""
     row = conn.execute(

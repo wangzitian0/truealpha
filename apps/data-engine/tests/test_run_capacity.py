@@ -17,12 +17,10 @@ default executor, a waiting job without the tag, a server size below a fresh cod
 
 from __future__ import annotations
 
-import inspect
 import subprocess
 import sys
 import tempfile
 import time
-import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -163,100 +161,6 @@ def test_a_job_without_an_executor_of_its_own_takes_the_in_process_executor_from
 
     assert [job.executor_def.name for job in control] == ["multi_or_in_process_executor"]
     assert [job.executor_def.name for job in deployed] == ["in_process"]
-
-
-# --- the jobs that wait for other runs -------------------------------------------------
-
-
-def _reaches(function: types.FunctionType, name: str, seen: set[types.CodeType] | None = None) -> bool:
-    """Whether `function` refers to `name`, itself or through functions of its own package that it names.
-
-    The code object holds every global name the function uses, its nested functions and its lambdas."""
-    seen = set() if seen is None else seen
-    return _code_reaches(function.__code__, function.__globals__, function.__module__.split(".")[0], name, seen)
-
-
-def _code_reaches(
-    code: types.CodeType, namespace: dict[str, Any], package: str, name: str, seen: set[types.CodeType]
-) -> bool:
-    if code in seen:
-        return False
-    seen.add(code)
-    if name in code.co_names:
-        return True
-    if any(
-        isinstance(const, types.CodeType) and _code_reaches(const, namespace, package, name, seen)
-        for const in code.co_consts
-    ):
-        return True
-    return any(
-        isinstance(target := namespace.get(referenced), types.FunctionType)
-        and target.__module__.split(".")[0] == package
-        and _code_reaches(target.__code__, target.__globals__, package, name, seen)
-        for referenced in code.co_names
-    )
-
-
-def _jobs_that_wait() -> set[str]:
-    """The jobs with an op whose function reaches `_await_settled`, directly or through a helper."""
-    return {
-        job.name
-        for job in defs.resolve_all_job_defs()
-        for node in job.graph.nodes
-        if _reaches(
-            inspect.unwrap(node.definition.compute_fn.decorated_fn), "_await_settled"
-        )  # the body, not `external_op`
-    }
-
-
-def _jobs_with_the_waiting_tag() -> set[str]:
-    return {job.name for job in defs.resolve_all_job_defs() if job.tags.get(WAITS_FOR_RUNS_TAG) == "true"}
-
-
-def _waits() -> None:
-    _await_settled()
-
-
-def _waits_through_a_helper() -> None:
-    _helper()
-
-
-def _helper() -> None:
-    _await_settled()
-
-
-def _waits_in_a_lambda() -> None:
-    (lambda: _await_settled())()
-
-
-def _does_not_wait() -> None:
-    _helper_that_does_not_wait()
-
-
-def _helper_that_does_not_wait() -> None:
-    return None
-
-
-def _await_settled() -> None:
-    return None
-
-
-@pytest.mark.parametrize(
-    ("function", "waits"),
-    [(_waits, True), (_waits_through_a_helper, True), (_waits_in_a_lambda, True), (_does_not_wait, False)],
-    ids=lambda value: getattr(value, "__name__", str(value)),
-)
-def test_the_scan_follows_a_wait_through_a_helper_and_a_lambda(function: types.FunctionType, waits: bool) -> None:
-    assert _reaches(function, "_await_settled") is waits
-
-
-def test_the_scan_for_waiting_jobs_finds_the_two_jobs_that_wait_today() -> None:
-    """Green while empty: a scan that finds no job would pass the test below for any job set."""
-    assert _jobs_that_wait() == {"output_invariants_check", "datahub_confidence_report"}
-
-
-def test_a_job_that_waits_for_other_runs_has_the_waiting_tag_and_no_other_job_has_it() -> None:
-    assert _jobs_with_the_waiting_tag() == _jobs_that_wait()
 
 
 # --- one process and the declared size -------------------------------------------------

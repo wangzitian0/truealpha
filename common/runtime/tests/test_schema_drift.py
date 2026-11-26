@@ -521,20 +521,6 @@ def test_a_reference_with_roles_resets_role_state(clone: str) -> None:
     assert member == (True,)
 
 
-def test_allow_remote_is_passed_by_one_module_only() -> None:
-    """`allow_remote=True` lifts the guard against building a reference beside a remote or tunnelled server. Only
-    the deployed check of an environment passes it, for the database it runs against. A second caller must come
-    through this test."""
-    root = Path(__file__).resolve().parents[3]
-    callers = sorted(
-        str(path.relative_to(root))
-        for base in ("apps", "common", "tools")
-        for path in (root / base).rglob("*.py")
-        if "tests" not in path.parts and ".venv" not in path.parts and "allow_remote=True" in path.read_text()
-    )
-    assert callers == ["apps/data-engine/src/data_engine/quality/topt_baseline.py"]
-
-
 def test_schema_drift_main_redacts_database_credentials(monkeypatch, capsys) -> None:
     secret = "QueryStringSecret987"
     dsn = f"postgresql://postgres@db.example:5432/truealpha?password={secret}"

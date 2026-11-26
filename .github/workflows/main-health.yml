@@ -85,6 +85,16 @@ jobs:
         if: github.event.workflow_run.conclusion == 'success'
         run: |
           set -euo pipefail
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$ESCALATION_TITLE in:title" --json number,title --jq ".[] | select(.title == \"$ESCALATION_TITLE\") | .number" | head -n1 || true)
+          if [ -z "$EXISTING" ]; then
+            exit 0
+          fi
+          CORE_RAN="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+            --jq '[.jobs[] | select((.name | test("^(python|web|db)($| / )")) and .conclusion == "success")] | any' || echo false)"
+          if [ "$CORE_RAN" != "true" ]; then
+            echo "Core code lanes were skipped on $HEAD_SHA; keeping open incident #$EXISTING."
+            exit 0
+          fi
           COMMIT_TITLE="${COMMIT_MESSAGE%%$'\n'*}"
           {
             echo "Resolved: ci-required passed on a push to main."
@@ -93,7 +103,4 @@ jobs:
             echo "- title: $COMMIT_TITLE"
             echo "- run: $RUN_URL"
           } > body.md
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$ESCALATION_TITLE in:title" --json number,title --jq ".[] | select(.title == \"$ESCALATION_TITLE\") | .number" | head -n1 || true)
-          if [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "$(cat body.md)"
-          fi
+          gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "$(cat body.md)"

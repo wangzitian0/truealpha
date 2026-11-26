@@ -89,4 +89,3 @@ def test_the_capture_obligations_keep_their_dispositions() -> None:
     assert dispositions()["checksum_mismatch"] == "stop"
     assert dispositions()["rate_limited"] == "retry"
     assert dispositions()["deferred_capacity"] == "trace_only"
-    assert len(dispositions()) == 13

@@ -67,11 +67,11 @@ def test_every_check_green_and_on_time_passes(capsys: pytest.CaptureFixture[str]
 def test_a_red_hard_verdict_fails_and_names_the_check_and_its_summary(capsys: pytest.CaptureFixture[str]) -> None:
     """Hard checks fail closed on a red verdict and name only the failing check."""
     verdicts = _all_green()
-    verdicts = [v for v in verdicts if v["check"] != "output_invariants"]
-    verdicts.append(_verdict("output_invariants", 1.0, ok=False, summary="failed: exit 1: 1 failed"))
+    verdicts = [v for v in verdicts if v["check"] != "job_run_health"]
+    verdicts.append(_verdict("job_run_health", 1.0, ok=False, summary="failed: 2 scheduled failures"))
     assert _run(verdicts) == 1
     err = capsys.readouterr().err
-    assert "output_invariants" in err and "exit 1: 1 failed" in err
+    assert "job_run_health" in err and "2 scheduled failures" in err
     assert "model_key_health" not in err
 
 
@@ -80,6 +80,8 @@ def test_a_red_hard_verdict_fails_and_names_the_check_and_its_summary(capsys: py
     [
         "market_data_freshness",
         "model_key_health",
+        "output_invariants",
+        "report_surface_proof",
         "topt_baseline",
         "nightly_backtest",
         "macro_freshness",
@@ -714,7 +716,7 @@ def test_an_unknown_first_declaration_gives_no_grace(capsys: pytest.CaptureFixtu
 def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
     """Pending is for a check with NO row; a hard check that failed, or any check that went quiet, is judged."""
     recent = lambda _check, _release: NOW - timedelta(minutes=5)  # noqa: E731
-    hard_check = "output_invariants"
+    hard_check = "job_run_health"
     base_hard = [entry for entry in _all_green() if entry["check"] != hard_check]
     assert _run([*base_hard, _verdict(hard_check, 1, ok=False, summary="failed: x")], first_declared=recent) == 1
     assert _run([*base_hard, _verdict(hard_check, 60)], first_declared=recent) == 1
@@ -877,14 +879,14 @@ def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.Mo
     assert json.loads(out_prod)["status"] == "pass"
     assert recorded[-1]["ok"] is True
 
-    # 3. Stale scheduled served_head -> raises dg.Failure and records ok=False
+    # 3. Stale scheduled served_head -> records ok=False fact without raising dg.Failure
     monkeypatch.setattr(
         psycopg,
         "connect",
         lambda *_a, **_k: _ProofConnection([("universe:topt-us-2026-03-31", "stale", "available", "older_than_3d")]),
     )
-    with pytest.raises(dg.Failure, match="mart.served_head"):
-        quality.run_report_surface_proof(dg.build_op_context())
+    stale_out = quality.run_report_surface_proof(dg.build_op_context())
+    assert json.loads(stale_out)["status"] == "fail"
     assert recorded[-1]["ok"] is False
     assert "stale served_head" in str(recorded[-1]["summary"])
 
@@ -899,9 +901,7 @@ def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.Mo
 def test_the_surface_proof_fails_closed_without_a_scheduled_head(
     monkeypatch: pytest.MonkeyPatch, rows: list[tuple[object, ...]], environment: str
 ) -> None:
-    """#28 V3: unknown is not OK. Zero scheduled heads in `mart.served_head` proves nothing about
-    freshness: no run was ever governed, or the identity row hides every head (the state that
-    `/api/health` reports as `governed_pointers: "unknown"`). The proof records red."""
+    """#28 V3: unknown is not OK. Zero scheduled heads in `mart.served_head` records a red fact."""
     import dagster as dg
     import psycopg
     from data_engine.lanes import quality
@@ -909,8 +909,8 @@ def test_the_surface_proof_fails_closed_without_a_scheduled_head(
     recorded = _patched_proof(monkeypatch)
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection(rows, environment=environment))
 
-    with pytest.raises(dg.Failure, match="no scheduled governed head"):
-        quality.run_report_surface_proof(dg.build_op_context())
+    out = quality.run_report_surface_proof(dg.build_op_context())
+    assert json.loads(out)["status"] == "fail"
     assert recorded[-1]["ok"] is False
     assert "no scheduled governed head" in str(recorded[-1]["summary"])
 

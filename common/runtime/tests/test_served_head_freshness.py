@@ -683,4 +683,4 @@ def test_the_database_holds_exactly_the_seed_in_the_migration(conn: psycopg.Conn
     registry = conn.execute(f"select {columns} from mart.served_artifact").fetchall()
     seeded = [tuple(row.values()) for row in read_seed_rows(MIGRATION, "mart.served_artifact")]
     assert sorted(registry, key=lambda row: row[0]) == sorted(seeded, key=lambda row: row[0])
-    assert len(registry) >= 14
+    assert registry

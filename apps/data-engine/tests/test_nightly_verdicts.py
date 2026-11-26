@@ -251,17 +251,15 @@ def test_the_nightly_job_records_both_verdicts_green_at_its_tick(monkeypatch, wr
     assert by_name["report_surface_proof"]["summary"] == "2/2 surfaces serve the governed head"
 
 
-def test_a_violated_invariant_is_a_red_verdict_and_a_red_run(monkeypatch, written) -> None:
+def test_a_violated_invariant_is_a_red_verdict_without_failing_the_dagster_run(monkeypatch, written) -> None:
     _suite(
         monkeypatch,
         exit_code=1,
         printed="  ok       gppe: 20 row(s) examined\ninvariant failed: peg_bounded: 2 violation(s) — PEG is bounded. Offending rows: NVDA 999",
     )
     _surfaces(monkeypatch, mismatched=True)
-    result = quality.output_invariants_job.execute_in_process(
-        tags={nightly_verdicts.TICK_TAG: TICK}, raise_on_error=False
-    )
-    assert not result.success, "the Dagster run stays red"
+    result = quality.output_invariants_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
+    assert result.success, "data-quality red facts must not crash Dagster jobs"
     by_name = {row["check"]: row for row in written}
     assert by_name["output_invariants"]["ok"] is False
     assert by_name["output_invariants"]["summary"] == "failed: exit 1: 1 failed (peg_bounded); 1 held, 0 empty"
@@ -398,15 +396,14 @@ def test_confidence_report_verdict_is_pending_without_comparator_and_red_when_ze
         ("datahub_confidence_report@topt", None, "no comparator for universe:topt-us-2026-06-30")
     ]
 
-    # 2. Comparator registered, 0 compared -> red (ok=False)
+    # 2. Comparator registered, 0 compared -> red (ok=False) recorded without raising dg.Failure
     written.clear()
     monkeypatch.setattr(
         confidence_report,
         "compile_report",
         lambda *_a, **_k: {**base_report, "comparators": {"filing": {"compared": 0, "disagree": 0}}},
     )
-    with pytest.raises(dg.Failure, match="compared 0 rows"):
-        quality.run_confidence_report(dg.build_op_context(), config)
+    quality.run_confidence_report(dg.build_op_context(), config)
     assert [(row["check"], row["ok"]) for row in written] == [("datahub_confidence_report@topt", False)]
 
     # 3. Comparator registered, >0 compared with 100% disagree rate -> green (never red for a rate)
@@ -540,7 +537,7 @@ def test_a_universe_still_settling_when_the_wait_runs_out_is_named_in_progress_n
     ]
 
 
-def test_a_mismatch_beside_an_in_progress_surface_still_fails_the_run(monkeypatch, written) -> None:
+def test_a_mismatch_beside_an_in_progress_surface_records_red_fact(monkeypatch, written) -> None:
     from datetime import timedelta
 
     from data_engine.quality import surface_proof
@@ -553,8 +550,7 @@ def test_a_mismatch_beside_an_in_progress_surface_still_fails_the_run(monkeypatc
             "coverage [qqq]", "datahub-stats.ts", run, None, universe="universe-list:qqq", in_progress="settling"
         ),
     )
-    with pytest.raises(dg.Failure, match="MISMATCH themes"):
-        _proof_run(monkeypatch, written, pending=[{"universe-list:qqq": "settling"}], verdicts=verdicts)
+    _proof_run(monkeypatch, written, pending=[{"universe-list:qqq": "settling"}], verdicts=verdicts)
     ((row),) = written
     assert row["ok"] is False
     assert row["summary"] == (
@@ -852,11 +848,11 @@ def test_every_declared_verdict_name_fits_the_column() -> None:
     assert all(nightly_verdicts.is_valid_name(name) for name in declared)
 
 
-def test_output_invariants_on_advance_sensor_heals_a_red_verdict_once_per_state(
+def test_output_invariants_on_advance_sensor_heals_a_red_verdict_once_per_head_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When output_invariants is red and a new build or governed head lands, the sensor launches
-    one run per (build, heads) state and skips once that state has been evaluated."""
+    """When output_invariants is red and a governed head advances, the sensor launches
+    one run per heads state regardless of image digest changes."""
 
     class _HeadCursor:
         def __enter__(self) -> _HeadCursor:
@@ -878,9 +874,10 @@ def test_output_invariants_on_advance_sensor_heals_a_red_verdict_once_per_state(
     ctx = dg.build_sensor_context()
     items = list(quality.output_invariants_on_advance_sensor(ctx))
     assert len(items) == 1 and isinstance(items[0], dg.RunRequest)
-    assert items[0].run_key == "heal:sha256:1234567890ab:universe:topt-us-2026-03-31=capture-run:abc"
+    assert items[0].run_key == "heads:universe:topt-us-2026-03-31=capture-run:abc"
 
-    # Re-evaluating on the same cursor skips without launching a duplicate run.
+    # Digest changes alone do not re-trigger the sensor on identical governed heads.
+    monkeypatch.setattr(settings, "image_digest", "sha256:fedcba0987654321")
     items_second = list(quality.output_invariants_on_advance_sensor(ctx))
     assert len(items_second) == 1 and isinstance(items_second[0], dg.SkipReason)
 

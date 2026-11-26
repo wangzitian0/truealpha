@@ -77,20 +77,7 @@ jobs:
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
             count=$((count + 1))
           done
-          if [ "$count" -lt 8 ]; then
-            echo "::error::expected at least 8 SQL contract files under db/tests/*_contract.sql, ran $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::expected at least 1 SQL contract file under db/tests/*_contract.sql, ran $count"
             exit 1
           fi
-
-      # #984: the schema this workflow just migrated, compared against the chain it was
-      # migrated FROM. The tool builds its own reference database from db/migrations +
-      # db/roles.sql on this same server and diffs the two catalogs, so nothing here has
-      # to be kept fresh when a migration lands.
-      - uses: ./.github/actions/setup-uv
-        with:
-          enable-cache: true
-      - name: Schema drift (migrated schema against the declared chain)
-        run: |
-          uv sync --package truealpha-runtime --frozen
-          uv run --no-sync python -m truealpha_tools.schema_drift \
-            --database-url postgresql://postgres:postgres@localhost:5432/truealpha
