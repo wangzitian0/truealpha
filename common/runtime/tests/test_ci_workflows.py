@@ -132,7 +132,7 @@ def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path
 
     def fake(argv, **_kw):  # type: ignore[no-untyped-def]
         ran.append(argv[-1])
-        if "infra2_sdk.delivery" in argv[-1]:
+        if "health_poll" in argv[-1]:
             return subprocess.CompletedProcess(argv, 1, "", "boom: first line\nsecond line")
         return subprocess.CompletedProcess(argv, 0, "", "")
 

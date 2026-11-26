@@ -7,9 +7,10 @@
       "argv": [
         "sh",
         "-c",
-        "python -m infra2_sdk.delivery poll --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --timeout-seconds 120 --interval-seconds 5"
+        "python3 tools/health_poll.py --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --timeout-seconds 120 --interval-seconds 5"
       ],
       "needs": [
+        "code",
         "running_service"
       ],
       "writes": false,
@@ -21,9 +22,10 @@
       "argv": [
         "sh",
         "-c",
-        "python -m infra2_sdk.delivery poll --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --timeout-seconds 60 --interval-seconds 5"
+        "python3 tools/health_poll.py --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --timeout-seconds 60 --interval-seconds 5"
       ],
       "needs": [
+        "code",
         "running_service"
       ],
       "writes": false,
