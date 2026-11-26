@@ -12,7 +12,7 @@ from psycopg import Connection
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
-from data_engine.datahub._helpers import gppe_branch_predicate
+from data_engine.datahub._helpers import gppe_branch_predicate, has_column
 from data_engine.datahub.capture_core.status_dimensions import coverage_status_dimensions
 
 _LINES_SQL = f"""
@@ -33,6 +33,10 @@ select h.fund_id,
        core.availability,
        core.confidence,
        core.availability_status,
+       core.revenue,
+       core.gross_profit,
+       core.employees,
+       core.gppe,
        core.valuation_basis
 from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
@@ -41,6 +45,10 @@ left join lateral (
            case when d.availability_status = 'available' then 'available' else 'unavailable' end as availability,
            coalesce(mnv.confidence, 0) as confidence,
            d.availability_status,
+           rev_n.value as revenue,
+           gp_n.value as gross_profit,
+           emp_n.value as employees,
+           mnv.value as gppe,
            case
                when d.current_price_to_gross_profit is not null then 'price_to_gross_profit'
                when d.valuation_gap is not null then 'price_to_sales'
@@ -52,7 +60,7 @@ left join lateral (
       on cil.run_id = scope.capture_run_id
      and cil.issuer_id = d.issuer_id
     left join lateral (
-        select mnv.confidence
+        select mnv.confidence, mnv.value
         from mart.metric_node_values mnv
         where mnv.run_id = scope.capture_run_id
           and mnv.issuer_id = d.issuer_id
@@ -60,6 +68,21 @@ left join lateral (
         order by (mnv.node_key = %(bank_key)s) desc
         limit 1
     ) mnv on true
+    left join lateral (
+        select m.value from mart.metric_node_values m
+        where m.run_id = scope.capture_run_id and m.issuer_id = d.issuer_id and m.node_key = 'revenue'
+        order by m.period desc limit 1
+    ) rev_n on true
+    left join lateral (
+        select m.value from mart.metric_node_values m
+        where m.run_id = scope.capture_run_id and m.issuer_id = d.issuer_id and m.node_key = 'gross_profit'
+        order by m.period desc limit 1
+    ) gp_n on true
+    left join lateral (
+        select m.value from mart.metric_node_values m
+        where m.run_id = scope.capture_run_id and m.issuer_id = d.issuer_id and m.node_key = 'employees_total'
+        order by m.period desc limit 1
+    ) emp_n on true
     left join lateral (
         select ei_row.listing_id
         from mart.entity_identity ei_row
@@ -72,7 +95,16 @@ left join lateral (
         where ei_row.entity_id::text = d.issuer_id
         limit 1
     ) ei_issuer on true
-    where scope.capture_run_id = %(run_id)s
+    where (
+        scope.capture_run_id = %(run_id)s
+        or scope.capture_run_id in (
+            select sh.run_id
+            from mart.served_head sh
+            where sh.run_id is not null
+              and not starts_with(sh.universe_id, 'universe:canary-')
+        )
+    )
+      and d.cutoff_at <= %(cutoff)s
       and (
           coalesce(ei.listing_id, cil.listing_id) = h.listing_id
           or (
@@ -89,7 +121,8 @@ left join lateral (
               )
           )
       )
-    order by (coalesce(ei.listing_id, cil.listing_id) = h.listing_id) desc,
+    order by (scope.capture_run_id = %(run_id)s) desc,
+             (coalesce(ei.listing_id, cil.listing_id) = h.listing_id) desc,
              d.valuation_gap is not null desc,
              exists (
                  select 1 from mart.governed_strategy_run g
@@ -154,6 +187,10 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
                 availability=None if availability is None else str(availability),
                 confidence=confidence,
                 availability_status=None if availability_status is None else str(availability_status),
+                revenue=revenue,
+                gross_profit=gross_profit,
+                employees=employees,
+                gppe=gppe,
             )
             for (
                 holding_name,
@@ -163,6 +200,10 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
                 availability,
                 confidence,
                 availability_status,
+                revenue,
+                gross_profit,
+                employees,
+                gppe,
                 _valuation_basis,
             ) in line_rows
         )
@@ -197,61 +238,126 @@ def materialize_fund_consolidation(
     definition: EtfConsolidationDefinition = ETF_CONSOLIDATION_V0,
 ) -> tuple[FundConsolidation, ...]:
     written: list[FundConsolidation] = []
+    store_virtual = has_column(connection, "mart", "fund_virtual_company", "virtual_revenue")
     for vintage in load_fund_vintages(connection, run_id=run_id, cutoff=cutoff):
         consolidation = consolidate_fund(vintage.lines, fund_id=vintage.fund_id, as_of=cutoff, definition=definition)
         availability, evidence, validation = _status_dimensions(consolidation)
-        connection.execute(
-            """
-            insert into mart.fund_virtual_company
-                (run_id, fund_id, fund_name, report_period, transaction_time, cutoff,
-                 definition_version, definition_sha256, weighted_valuation_gap,
-                 total_weight_pct, resolved_weight_pct, valued_weight_pct,
-                 lines, valued_lines, confidence, reason_codes,
-                 availability_status, source_evidence_status, factor_validation_status, valuation_basis)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (run_id, fund_id) do update set
-                fund_name = excluded.fund_name,
-                report_period = excluded.report_period,
-                transaction_time = excluded.transaction_time,
-                cutoff = excluded.cutoff,
-                definition_version = excluded.definition_version,
-                definition_sha256 = excluded.definition_sha256,
-                weighted_valuation_gap = excluded.weighted_valuation_gap,
-                total_weight_pct = excluded.total_weight_pct,
-                resolved_weight_pct = excluded.resolved_weight_pct,
-                valued_weight_pct = excluded.valued_weight_pct,
-                lines = excluded.lines,
-                valued_lines = excluded.valued_lines,
-                confidence = excluded.confidence,
-                reason_codes = excluded.reason_codes,
-                availability_status = excluded.availability_status,
-                source_evidence_status = excluded.source_evidence_status,
-                factor_validation_status = excluded.factor_validation_status,
-                valuation_basis = excluded.valuation_basis
-            """,
-            (
-                run_id,
-                vintage.fund_id,
-                vintage.fund_name,
-                vintage.report_period,
-                vintage.transaction_time,
-                cutoff,
-                definition.factor_version,
-                definition.content_sha256,
-                consolidation.result.value,
-                consolidation.total_weight,
-                consolidation.resolved_weight,
-                consolidation.valued_weight,
-                consolidation.lines,
-                consolidation.valued_lines,
-                consolidation.result.confidence,
-                list(consolidation.result.flags),
-                availability.value,
-                evidence.value,
-                validation.value,
-                None if consolidation.result.value is None else vintage.valuation_basis,
-            ),
-        )
+        val_basis = None if consolidation.result.value is None else vintage.valuation_basis
+        if store_virtual:
+            connection.execute(
+                """
+                insert into mart.fund_virtual_company
+                    (run_id, fund_id, fund_name, report_period, transaction_time, cutoff,
+                     definition_version, definition_sha256, weighted_valuation_gap,
+                     total_weight_pct, resolved_weight_pct, valued_weight_pct,
+                     lines, valued_lines, confidence, reason_codes,
+                     availability_status, source_evidence_status, factor_validation_status, valuation_basis,
+                     virtual_revenue, virtual_gross_profit, virtual_employees, virtual_gppe)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict (run_id, fund_id) do update set
+                    fund_name = excluded.fund_name,
+                    report_period = excluded.report_period,
+                    transaction_time = excluded.transaction_time,
+                    cutoff = excluded.cutoff,
+                    definition_version = excluded.definition_version,
+                    definition_sha256 = excluded.definition_sha256,
+                    weighted_valuation_gap = excluded.weighted_valuation_gap,
+                    total_weight_pct = excluded.total_weight_pct,
+                    resolved_weight_pct = excluded.resolved_weight_pct,
+                    valued_weight_pct = excluded.valued_weight_pct,
+                    lines = excluded.lines,
+                    valued_lines = excluded.valued_lines,
+                    confidence = excluded.confidence,
+                    reason_codes = excluded.reason_codes,
+                    availability_status = excluded.availability_status,
+                    source_evidence_status = excluded.source_evidence_status,
+                    factor_validation_status = excluded.factor_validation_status,
+                    valuation_basis = excluded.valuation_basis,
+                    virtual_revenue = excluded.virtual_revenue,
+                    virtual_gross_profit = excluded.virtual_gross_profit,
+                    virtual_employees = excluded.virtual_employees,
+                    virtual_gppe = excluded.virtual_gppe
+                """,
+                (
+                    run_id,
+                    vintage.fund_id,
+                    vintage.fund_name,
+                    vintage.report_period,
+                    vintage.transaction_time,
+                    cutoff,
+                    definition.factor_version,
+                    definition.content_sha256,
+                    consolidation.result.value,
+                    consolidation.total_weight,
+                    consolidation.resolved_weight,
+                    consolidation.valued_weight,
+                    consolidation.lines,
+                    consolidation.valued_lines,
+                    consolidation.result.confidence,
+                    list(consolidation.result.flags),
+                    availability.value,
+                    evidence.value,
+                    validation.value,
+                    val_basis,
+                    consolidation.virtual_revenue,
+                    consolidation.virtual_gross_profit,
+                    consolidation.virtual_employees,
+                    consolidation.virtual_gppe,
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                insert into mart.fund_virtual_company
+                    (run_id, fund_id, fund_name, report_period, transaction_time, cutoff,
+                     definition_version, definition_sha256, weighted_valuation_gap,
+                     total_weight_pct, resolved_weight_pct, valued_weight_pct,
+                     lines, valued_lines, confidence, reason_codes,
+                     availability_status, source_evidence_status, factor_validation_status, valuation_basis)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict (run_id, fund_id) do update set
+                    fund_name = excluded.fund_name,
+                    report_period = excluded.report_period,
+                    transaction_time = excluded.transaction_time,
+                    cutoff = excluded.cutoff,
+                    definition_version = excluded.definition_version,
+                    definition_sha256 = excluded.definition_sha256,
+                    weighted_valuation_gap = excluded.weighted_valuation_gap,
+                    total_weight_pct = excluded.total_weight_pct,
+                    resolved_weight_pct = excluded.resolved_weight_pct,
+                    valued_weight_pct = excluded.valued_weight_pct,
+                    lines = excluded.lines,
+                    valued_lines = excluded.valued_lines,
+                    confidence = excluded.confidence,
+                    reason_codes = excluded.reason_codes,
+                    availability_status = excluded.availability_status,
+                    source_evidence_status = excluded.source_evidence_status,
+                    factor_validation_status = excluded.factor_validation_status,
+                    valuation_basis = excluded.valuation_basis
+                """,
+                (
+                    run_id,
+                    vintage.fund_id,
+                    vintage.fund_name,
+                    vintage.report_period,
+                    vintage.transaction_time,
+                    cutoff,
+                    definition.factor_version,
+                    definition.content_sha256,
+                    consolidation.result.value,
+                    consolidation.total_weight,
+                    consolidation.resolved_weight,
+                    consolidation.valued_weight,
+                    consolidation.lines,
+                    consolidation.valued_lines,
+                    consolidation.result.confidence,
+                    list(consolidation.result.flags),
+                    availability.value,
+                    evidence.value,
+                    validation.value,
+                    val_basis,
+                ),
+            )
         written.append(consolidation)
     return tuple(written)
 

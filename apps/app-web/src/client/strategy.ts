@@ -1,13 +1,15 @@
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
 
-export type PegGrowthConvention = "historical_cagr" | "consensus" | "guidance";
+export type PegGrowthConvention = "historical_cagr" | "geometric_cagr" | "consensus" | "guidance";
 export const PEG_GROWTH_CONVENTIONS: readonly PegGrowthConvention[] = [
   "historical_cagr",
+  "geometric_cagr",
   "consensus",
   "guidance",
 ];
 export const PEG_CONVENTION_LABELS: Record<PegGrowthConvention, string> = {
   historical_cagr: "Historical CAGR",
+  geometric_cagr: "Geometric 3Y CAGR",
   consensus: "Consensus",
   guidance: "Guidance",
 };

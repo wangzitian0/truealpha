@@ -6,7 +6,8 @@ from typing import Any, Final, Literal, Protocol
 
 import psycopg
 from psycopg.rows import dict_row
-from truealpha_contracts.common import FrozenModel, load_data_json
+from pydantic import SerializerFunctionWrapHandler, model_serializer
+from truealpha_contracts.common import FrozenModel, drop_none_fields, load_data_json
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
 NO_SERVED_ROW: Final = "no_row_in_served_head"
@@ -58,10 +59,15 @@ class SupplyChainExposure(_ModuleRow):
 class AnalystRatings(_ModuleRow):
     consensus_rating: str | None
     target_price: str | None
+    track_record_score: str | None = None
     analysts_count: int
     buy_count: int
     hold_count: int
     sell_count: int
+
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return drop_none_fields(handler(self), "track_record_score")
 
 
 class IssuerModuleUnavailable(FrozenModel):
@@ -172,7 +178,13 @@ def _module_sql(table: str, alias: str, cols: str, *, where_issuer: str | None =
 
 
 _SUPPLY_CHAIN_COLS = "s.exposure_score::text as exposure_score, s.direct_partners, s.suppliers_count, s.customers_count, s.max_partner_share::text as max_partner_share"
-_ANALYST_RATINGS_COLS = "r.consensus_rating::text as consensus_rating, coalesce(to_jsonb(r) ->> 'target_price', (select substring(rc from '^target_price:([0-9.]+)$') from unnest(r.reason_codes) as rc where rc like 'target_price:%%' limit 1)) as target_price, r.analysts_count, r.buy_count, r.hold_count, r.sell_count"
+_ANALYST_RATINGS_COLS = (
+    "r.consensus_rating::text as consensus_rating, "
+    "coalesce(to_jsonb(r) ->> 'target_price', "
+    "(select substring(rc from '^target_price:([0-9.]+)$') from unnest(r.reason_codes) as rc where rc like 'target_price:%%' limit 1)) as target_price, "
+    "to_jsonb(r) ->> 'track_record_score' as track_record_score, "
+    "r.analysts_count, r.buy_count, r.hold_count, r.sell_count"
+)
 SUPPLY_CHAIN_EXPOSURE_SQL = _module_sql("mart.issuer_supply_chain_exposure", "s", _SUPPLY_CHAIN_COLS)
 ANALYST_RATINGS_SQL = _module_sql("mart.issuer_analyst_ratings", "r", _ANALYST_RATINGS_COLS)
 _SUPPLY_CHAIN_BY_IDS_SQL = _module_sql(

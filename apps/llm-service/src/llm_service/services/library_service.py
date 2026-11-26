@@ -417,6 +417,7 @@ def _lookup_governed_card_artifact(
     cutoff_at: datetime | None = None,
     database_url: str | None = None,
 ) -> tuple[str, str] | None:
+    universe_candidates = [universe, f"universe-list:{universe}"] if universe and universe != "all" else [universe]
     sql = """
       select a.html, a.render_mode
       from mart.research_card_artifacts a
@@ -425,14 +426,14 @@ def _lookup_governed_card_artifact(
         and a.card_kind = %s
         and a.subject_key = %s
         and a.convention = %s
-        and a.universe = %s
+        and a.universe = any(%s::text[])
         and (%s::timestamptz is null or a.cutoff_at = %s::timestamptz)
       order by h.advanced_at desc, h.sequence desc, a.run_id desc
       limit 1
     """
 
     def _q(cur: Any) -> tuple[str, str] | None:
-        cur.execute(sql, (card_kind, subject_key, convention, universe, cutoff_at, cutoff_at))
+        cur.execute(sql, (card_kind, subject_key, convention, universe_candidates, cutoff_at, cutoff_at))
         row = cur.fetchone()
         return (str(row["html"]), str(row["render_mode"])) if row else None
 
@@ -511,6 +512,69 @@ def build_library_report(
     )
 
 
+def _resolve_etf_cutoff(database_url: str | None) -> datetime | None:
+    if not database_url:
+        return None
+
+    def _q(cur: Any) -> datetime | None:
+        cur.execute(
+            """
+            select max(f.cutoff) as cutoff
+            from mart.fund_virtual_company f
+            join mart.served_head h on h.run_id = f.run_id
+            where h.run_id is not null and not starts_with(h.universe_id, 'universe:canary-')
+            """
+        )
+        row = cur.fetchone()
+        return row.get("cutoff") if row else None
+
+    return with_mart_readonly(_q, database_url=database_url)
+
+
+def _route_card_report_spec(
+    req: CardExportRequest,
+) -> tuple[ResearchReportKind, tuple[str, ...], tuple[ReportSectionKind, ...], str]:
+    if req.card_kind == CardKind.COMPANY:
+        target = (req.issuer_id or "").strip() or "NVDA"
+        return (
+            ResearchReportKind.COMPANY,
+            (target,),
+            (ReportSectionKind.OPERATING_EFFICIENCY, ReportSectionKind.VALUATION, ReportSectionKind.STRATEGY_SUMMARY),
+            target,
+        )
+    if req.card_kind == CardKind.SUPPLY_CHAIN:
+        target = (req.issuer_id or "").strip() or "NVDA"
+        return (
+            ResearchReportKind.COMPANY,
+            (target,),
+            (ReportSectionKind.SUPPLY_CHAIN, ReportSectionKind.STRATEGY_SUMMARY),
+            target,
+        )
+    if req.card_kind == CardKind.ETF:
+        target = (req.issuer_id or "").strip() or "etf:qqq"
+        return (
+            ResearchReportKind.ETF,
+            (target,),
+            (ReportSectionKind.ETF_VIRTUAL_COMPANY, ReportSectionKind.VALUATION),
+            target,
+        )
+    if req.card_kind == CardKind.COMPARISON:
+        raw_targets = tuple(t.strip() for t in (req.issuer_id or "").split(",") if t.strip())
+        if len(raw_targets) >= 2:
+            return (
+                ResearchReportKind.THEME_RANKING,
+                raw_targets,
+                (ReportSectionKind.VALUATION, ReportSectionKind.STRATEGY_SUMMARY),
+                ",".join(raw_targets),
+            )
+    return (
+        ResearchReportKind.THEME_RANKING,
+        ("theme:large_model_value",),
+        (ReportSectionKind.VALUATION, ReportSectionKind.STRATEGY_SUMMARY, ReportSectionKind.RANKING),
+        "theme:large_model_value",
+    )
+
+
 def export_or_render_card(
     context: AccessContext,
     req: CardExportRequest,
@@ -533,34 +597,26 @@ def export_or_render_card(
         target_cutoff_dt = report_request.cutoff_at
         subject_key = (
             report_request.target_entity_ids[0]
-            if req.card_kind == CardKind.COMPANY and report_request.target_entity_ids
+            if req.card_kind in {CardKind.COMPANY, CardKind.ETF, CardKind.SUPPLY_CHAIN}
+            and report_request.target_entity_ids
             else "theme:large_model_value"
         )
     else:
-        target_cutoff_dt = (
-            datetime.fromisoformat(req.cutoff.replace("Z", "+00:00"))
-            if req.cutoff
-            else _resolve_governed_cutoff(
+        report_kind, targets, sections, subject_key = _route_card_report_spec(req)
+        if req.cutoff:
+            target_cutoff_dt = datetime.fromisoformat(req.cutoff.replace("Z", "+00:00"))
+        elif report_kind is ResearchReportKind.ETF:
+            target_cutoff_dt = _resolve_etf_cutoff(postgres_db_url) or _resolve_governed_cutoff(
                 context,
                 research_repo=active_repo,
                 database_url=postgres_db_url,
             )
-        )
-
-        if req.card_kind == CardKind.COMPANY and req.issuer_id:
-            report_kind = ResearchReportKind.COMPANY
-            targets = (req.issuer_id,)
-            sections: tuple[ReportSectionKind, ...] = (
-                ReportSectionKind.OPERATING_EFFICIENCY,
-                ReportSectionKind.VALUATION,
-                ReportSectionKind.STRATEGY_SUMMARY,
-            )
-            subject_key = req.issuer_id
         else:
-            report_kind = ResearchReportKind.THEME_RANKING
-            targets = ("theme:large_model_value",)
-            sections = (ReportSectionKind.VALUATION, ReportSectionKind.STRATEGY_SUMMARY, ReportSectionKind.RANKING)
-            subject_key = "theme:large_model_value"
+            target_cutoff_dt = _resolve_governed_cutoff(
+                context,
+                research_repo=active_repo,
+                database_url=postgres_db_url,
+            )
 
         effective_req = ResearchReportRequest(
             report_kind=report_kind,

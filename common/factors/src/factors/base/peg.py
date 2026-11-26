@@ -66,6 +66,28 @@ def _recency_weighted_growth(
         return weighted / total_weight, base_end, latest_end_used
 
 
+def _geometric_cagr_growth(
+    values: Mapping[date, Decimal], years: int
+) -> tuple[Decimal | None, date | None, date | None]:
+    if not values or years < 1:
+        return None, None, None
+    latest_end = max(values)
+    target_days = round(years * 365.25)
+    base_end = min(
+        (end for end in values if end < latest_end),
+        key=lambda end: abs((latest_end - end).days - target_days),
+        default=None,
+    )
+    if base_end is None or abs((latest_end - base_end).days - target_days) > _WINDOW_TOLERANCE_DAYS:
+        return None, None, None
+    base_val, latest_val = values[base_end], values[latest_end]
+    if base_val <= 0 or latest_val <= 0:
+        return None, base_end, latest_end
+    with localcontext(_DECIMAL_CONTEXT):
+        cagr = ((latest_val / base_val).ln() / Decimal(years)).exp() - Decimal(1)
+        return cagr, base_end, latest_end
+
+
 def _compute_peg_ratio(
     *,
     entity_id: str,
@@ -154,6 +176,24 @@ def peg(
             assert scalar_cg is not None and scalar_cg.value is not None
             rate_pct = scalar_cg.value
         consumed_confs.extend(f.confidence for f in consensus_facts)
+    elif growth_convention is GrowthConvention.GEOMETRIC_CAGR:
+        growth, base_end, latest_end = _geometric_cagr_growth(series, cagr_years)
+        conv_flags = [f"growth_convention:{GrowthConvention.GEOMETRIC_CAGR.value}", f"cagr_years:{cagr_years}"]
+        if base_end is not None and latest_end is not None:
+            conv_flags.append(f"window:{base_end.isoformat()}..{latest_end.isoformat()}")
+        endpoint_confs = [
+            f.confidence
+            for f in facts
+            if f.entity_id == entity_id
+            and f.metric == _NET_INCOME
+            and f.value is not None
+            and f.fiscal_period is not None
+            and (p := parse_annual(f.fiscal_period)) is not None
+            and p.end in {base_end, latest_end}
+        ]
+        consumed_confs = [price.confidence, shares.confidence, *endpoint_confs]
+        with localcontext(_DECIMAL_CONTEXT):
+            rate_pct = growth * Decimal(100) if growth is not None else None
     else:
         conv_flags = [f"cagr_years:{cagr_years}"]
         growth, base_end, latest_end = _recency_weighted_growth(series, cagr_years)

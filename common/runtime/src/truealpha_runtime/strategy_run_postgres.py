@@ -110,6 +110,24 @@ DECISIONS_FROM_SQL = """
         limit 1
     ) peg_cr on true
     left join lateral (
+        select mc.value
+        from mart.metric_node_values mc
+        where mc.run_id = scope.capture_run_id
+          and mc.issuer_id = d.issuer_id
+          and mc.node_key = 'peg_geometric_cagr'
+        order by mc.period desc, mc.node_id
+        limit 1
+    ) peg_g on true
+    left join lateral (
+        select mcr.value
+        from mart.metric_node_values mcr
+        where mcr.run_id = scope.capture_run_id
+          and mcr.issuer_id = d.issuer_id
+          and mcr.node_key = 'peg_geometric_cagr_rank'
+        order by mcr.period desc, mcr.node_id
+        limit 1
+    ) peg_gr on true
+    left join lateral (
         select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = d.issuer_id limit 1
     ) ei on true
     where d.strategy_run_id = %s
@@ -123,6 +141,7 @@ _DECISIONS_SQL = (
     " d.source_evidence_status, d.factor_validation_status, d.peg_reason_codes,"
     " d.rank, d.target_weight, d.peg, d.peg_rank,"
     " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
+    " peg_g.value as peg_geometric_cagr, peg_gr.value as peg_geometric_cagr_rank,"
     " d.labor_efficiency_metric, m.confidence " + DECISIONS_FROM_SQL
 )
 
@@ -197,6 +216,8 @@ def _normalize_convention(convention: str | None) -> str:
         return "consensus"
     if convention in {"guidance", "company_guidance"}:
         return "guidance"
+    if convention in {"geometric_cagr", "cagr_3y"}:
+        return "geometric_cagr"
     return "historical_cagr"
 
 
@@ -204,9 +225,14 @@ def _decision_from_row(row: dict[str, Any], *, convention: str = "historical_cag
     data = dict(row)
     peg_consensus = data.pop("peg_consensus", None)
     peg_consensus_rank = data.pop("peg_consensus_rank", None)
+    peg_geometric = data.pop("peg_geometric_cagr", None)
+    peg_geometric_rank = data.pop("peg_geometric_cagr_rank", None)
     if convention == "consensus":
         data["peg"] = peg_consensus
         data["peg_rank"] = int(peg_consensus_rank) if peg_consensus_rank is not None else None
+    elif convention == "geometric_cagr":
+        data["peg"] = peg_geometric
+        data["peg_rank"] = int(peg_geometric_rank) if peg_geometric_rank is not None else None
     elif convention == "guidance":
         data["peg"] = None
         data["peg_rank"] = None

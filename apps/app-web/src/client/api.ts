@@ -37,6 +37,8 @@ export type OpsOverviewResponse = Schemas["OpsOverviewResponse"];
 export type DatahubStatsResponse = Schemas["DatahubStatsResponse"];
 export type TriggerPipelineRequest = Schemas["TriggerPipelineRequest"];
 export type TriggerPipelineResponse = Schemas["TriggerPipelineResponse"];
+export type TriggerBacktestRequest = Schemas["TriggerBacktestRequest"];
+export type TriggerBacktestResponse = Schemas["TriggerBacktestResponse"];
 export type HeadRollbackRequest = Schemas["HeadRollbackRequest"];
 export type HeadRollbackResponse = Schemas["HeadRollbackResponse"];
 
@@ -102,6 +104,8 @@ export const api = {
     apiRequest<RankingsResponse>(`/api/v1/strategy/rankings${qs(params ?? {})}`, opts),
   listBacktests: (limit = 20, opts?: RequestOpts) =>
     apiRequest<BacktestRunsResponse>(`/api/v1/strategy/backtests${qs({ limit })}`, opts),
+  triggerBacktest: (body: TriggerBacktestRequest = {}, opts?: RequestOpts) =>
+    json<TriggerBacktestResponse>("/api/v1/strategy/backtests/trigger", body, opts),
   getBacktest: (runId: string, opts?: RequestOpts) =>
     apiRequest<BacktestDetailResponse>(`/api/v1/strategy/backtests/${encodeURIComponent(runId)}`, opts),
   getFunds: (opts?: RequestOpts) => apiRequest<FundValuationsResponse>("/api/v1/entities/holdings", opts),
@@ -112,8 +116,8 @@ export const api = {
     apiRequest<SupplyChainExposure | IssuerModuleUnavailable>(`/api/v1/entities/${encodeURIComponent(issuerId)}/supply-chain`, opts),
   getAnalystRatings: (issuerId: string, opts?: RequestOpts) =>
     apiRequest<AnalystRatings | IssuerModuleUnavailable>(`/api/v1/entities/${encodeURIComponent(issuerId)}/analyst-ratings`, opts),
-  getEntity: (issuerId: string, opts?: RequestOpts) =>
-    apiRequest<EntityDetailResponse>(`/api/v1/entities/${encodeURIComponent(issuerId)}`, opts),
+  getEntity: (issuerId: string, opts?: RequestOpts, convention?: string) =>
+    apiRequest<EntityDetailResponse>(`/api/v1/entities/${encodeURIComponent(issuerId)}${qs({ convention })}`, opts),
   getLibraryReport: (params?: { report_kind?: string; target_entity_ids?: string; cutoff_at?: string; format?: "json" | "markdown" }, opts?: RequestOpts) =>
     apiRequest<LibraryReportResponse>(`/api/v1/library/reports${qs(params ?? {})}`, opts),
   exportCard: (body: CardExportRequest, opts?: RequestOpts) => json<CardExportResponse>("/api/v1/library/cards/export", body, opts),

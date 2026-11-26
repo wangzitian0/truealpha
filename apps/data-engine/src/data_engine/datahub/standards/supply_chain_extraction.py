@@ -12,7 +12,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from factors.base.supply_chain_exposure import SupplyChainExposure, SupplyChainPartner, supply_chain_exposure
+from factors.base.supply_chain_exposure import (
+    MIN_EDGE_CONFIDENCE,
+    SupplyChainExposure,
+    SupplyChainPartner,
+    supply_chain_exposure,
+)
 from psycopg import Connection
 
 from data_engine.datahub._helpers import (
@@ -211,6 +216,11 @@ def _extract_supply_chain_result(
         pair = (partner.relation_type, partner.partner_name.lower())
         if pair in seen_pairs:
             continue
+        edge_conf = _edge_confidence(
+            issuer_id, accession, partner.partner_name, partner.relation_type, filing_date, cutoff=cutoff
+        )
+        if edge_conf < MIN_EDGE_CONFIDENCE:
+            continue
         seen_pairs.add(pair)
         results.append(
             SupplyChainEdgeCandidate(
@@ -218,9 +228,7 @@ def _extract_supply_chain_result(
                 target_entity_name=partner.partner_name,
                 relation_type=partner.relation_type,
                 evidence_sentence=partner.evidence_quote[:240],
-                confidence=_edge_confidence(
-                    issuer_id, accession, partner.partner_name, partner.relation_type, filing_date, cutoff=cutoff
-                ),
+                confidence=edge_conf,
                 target_ticker=partner.ticker,
                 revenue_share_pct=partner.revenue_share_pct,
                 extractor=extraction.extractor,
@@ -526,7 +534,7 @@ def persist_extracted_supply_chain_edges(
             diag.replayed += 1
         else:
             diag.model_extracted += 1
-        candidates = extraction.candidates
+        candidates = [c for c in extraction.candidates if c.confidence >= MIN_EDGE_CONFIDENCE]
         for cand in candidates:
             partner_uuid = _resolve_or_mint_partner_entity(
                 connection,

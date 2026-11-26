@@ -331,6 +331,54 @@
         }
       }
     },
+    "/api/v1/strategy/backtests/trigger": {
+      "post": {
+        "tags": [
+          "strategy"
+        ],
+        "summary": "Backtest Trigger",
+        "operationId": "strategy_backtest_trigger",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TriggerBacktestRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerBacktestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/strategy/backtests/{run_id}": {
       "get": {
         "tags": [
@@ -589,6 +637,22 @@
             "schema": {
               "type": "string",
               "title": "Issuer Id"
+            }
+          },
+          {
+            "name": "convention",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Convention"
             }
           }
         ],
@@ -1288,97 +1352,8 @@
   "components": {
     "schemas": {
       "AnalystRatings": {
-        "properties": {
-          "run_id": {
-            "type": "string",
-            "title": "Run Id"
-          },
-          "cutoff": {
-            "type": "string",
-            "title": "Cutoff"
-          },
-          "confidence": {
-            "type": "string",
-            "title": "Confidence"
-          },
-          "reason_codes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Reason Codes"
-          },
-          "extractor": {
-            "type": "string",
-            "title": "Extractor"
-          },
-          "availability_status": {
-            "$ref": "#/components/schemas/AvailabilityStatus"
-          },
-          "source_evidence_status": {
-            "$ref": "#/components/schemas/InputEvidenceStatus"
-          },
-          "factor_validation_status": {
-            "$ref": "#/components/schemas/FactorValidationStatus"
-          },
-          "consensus_rating": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Consensus Rating"
-          },
-          "target_price": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target Price"
-          },
-          "analysts_count": {
-            "type": "integer",
-            "title": "Analysts Count"
-          },
-          "buy_count": {
-            "type": "integer",
-            "title": "Buy Count"
-          },
-          "hold_count": {
-            "type": "integer",
-            "title": "Hold Count"
-          },
-          "sell_count": {
-            "type": "integer",
-            "title": "Sell Count"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "run_id",
-          "cutoff",
-          "confidence",
-          "reason_codes",
-          "extractor",
-          "availability_status",
-          "source_evidence_status",
-          "factor_validation_status",
-          "consensus_rating",
-          "target_price",
-          "analysts_count",
-          "buy_count",
-          "hold_count",
-          "sell_count"
-        ],
-        "title": "AnalystRatings"
+        "additionalProperties": true,
+        "type": "object"
       },
       "AvailabilityStatus": {
         "type": "string",
@@ -2988,6 +2963,50 @@
               }
             ],
             "title": "Weighted Gap Basis"
+          },
+          "virtual_revenue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Revenue"
+          },
+          "virtual_gross_profit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Gross Profit"
+          },
+          "virtual_employees": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Employees"
+          },
+          "virtual_gppe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Gppe"
           },
           "availability_status": {
             "anyOf": [
@@ -4882,6 +4901,89 @@
         },
         "type": "object",
         "title": "TraceResponse"
+      },
+      "TriggerBacktestRequest": {
+        "properties": {
+          "definition_resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Resource"
+          },
+          "start_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Cutoff"
+          },
+          "end_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Cutoff"
+          },
+          "executed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executed At"
+          }
+        },
+        "type": "object",
+        "title": "TriggerBacktestRequest"
+      },
+      "TriggerBacktestResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id"
+          },
+          "dedupe_key": {
+            "type": "string",
+            "title": "Dedupe Key"
+          },
+          "job_name": {
+            "type": "string",
+            "title": "Job Name",
+            "default": "nightly_backtest_pipeline"
+          },
+          "run_key": {
+            "type": "string",
+            "title": "Run Key"
+          },
+          "executed_at": {
+            "type": "string",
+            "title": "Executed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "dedupe_key",
+          "run_key",
+          "executed_at"
+        ],
+        "title": "TriggerBacktestResponse"
       },
       "TriggerPipelineRequest": {
         "properties": {

@@ -633,6 +633,11 @@
         "kind": "outcome",
         "class": "disputed"
       },
+      "below_edge_confidence_threshold": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1742"
+      },
       "below_minimum_classified_share": {
         "kind": "outcome",
         "class": "pipeline_gap",
@@ -1417,6 +1422,9 @@
         "class_of_suffix": true
       },
       "relation:": {
+        "kind": "evidence"
+      },
+      "shock_model:": {
         "kind": "evidence"
       },
       "window:": {

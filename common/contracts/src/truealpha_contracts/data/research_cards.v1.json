@@ -185,7 +185,17 @@
     "suppliers_count": "上游供应商数",
     "customers_count": "下游客户数",
     "max_partner_share": "最大单一伙伴占比",
-    "virtual_company_fundamentals": "ETF 穿透虚拟公司基本面"
+    "virtual_company_fundamentals": "ETF 穿透虚拟公司基本面",
+    "weighted_valuation_gap": "加权估值折价",
+    "valued_weight_pct": "已估值持仓权重 (%)",
+    "resolved_weight_pct": "已解析持仓权重 (%)",
+    "virtual_revenue": "虚拟公司加权营收",
+    "virtual_gross_profit": "虚拟公司加权毛利",
+    "virtual_employees": "虚拟公司加权员工数",
+    "virtual_gppe": "虚拟公司加权 GPPE",
+    "valuation_basis": "估值基准倍数",
+    "valued_lines": "已估值持仓条数",
+    "lines": "披露持仓总条数"
   },
   "tier_labels_zh": {
     "large_model_native": "大模型原生档 (上限 33.34x)",

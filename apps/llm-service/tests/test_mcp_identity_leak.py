@@ -75,6 +75,7 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
     "strategy_rankings": {"request": {"strategy_id": "large_model_value_v0"}},
     "strategy_backtests": {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
     "strategy_backtest_detail": {"request": {"run_id": "backtest-run:unused"}},
+    "strategy_backtest_trigger": {"request": {"executed_at": _CUTOFF}},
     "entities_holdings": {"request": {"fund_id": "etf:series:S000101292"}},
     "entities_themes": {"request": {"theme_id": "ai-infrastructure", "limit": 10}},
     "entities_trace": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},

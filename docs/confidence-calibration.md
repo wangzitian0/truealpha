@@ -5,11 +5,14 @@ continuous, explainable score and shows how it responds to source independence,
 freshness, semantic quality, lineage, completeness, and conflict. It is not a
 Production threshold or a claim that the full TOPT universe is calibrated.
 
-Implementation (#1333, #1352): `common/factors/src/factors/confidence.py`
-(`evaluate_continuous_confidence`) is
-called by `apps/data-engine/src/data_engine/datahub/confidence_report.py` on
-every governed head to compute one deterministic `confidence` from 0 to 1 for each
-cell. The DTOs live in `common/contracts/src/truealpha_contracts/confidence.py`.
+Implementation (#1333, #1352, #1851): `common/factors/src/factors/confidence.py`
+(`evaluate_continuous_confidence` / `evaluate_cell_confidence`) is called by
+`apps/data-engine/src/data_engine/datahub/confidence_report.py` on every governed head AND by
+`apps/data-engine/src/data_engine/datahub/_helpers.py` (`single_origin_confidence`,
+`calibrated_confidence_for`) across SEC financial facts, panel leaves, headcount extraction, segment
+revenue extraction, theme purity, supply-chain edges, analyst consensus, and market cap (`M=weight`
+on discrete extractor priors so one formula scores both report cells and materialized leaves). The
+DTOs live in `common/contracts/src/truealpha_contracts/confidence.py`.
 The display band of a confidence is `confidence_band`
 (`common/contracts/src/truealpha_contracts/confidence_bands.py`); its two thresholds
 are in `data/confidence_bands.v1.json`.

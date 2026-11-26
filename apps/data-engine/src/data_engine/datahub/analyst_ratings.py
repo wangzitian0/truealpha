@@ -15,6 +15,7 @@ from factors.base.analyst_track_record import AnalystRatingItem, AnalystTrackRec
 from psycopg import Connection
 
 from data_engine.datahub._helpers import (
+    has_column,
     safe_case_id_part,
     single_origin_confidence,
     unbacked_status_values,
@@ -47,6 +48,24 @@ _INSERT_SQL = (
     "confidence = excluded.confidence, reason_codes = excluded.reason_codes, extractor = excluded.extractor, "
     "availability_status = excluded.availability_status, source_evidence_status = excluded.source_evidence_status, "
     "factor_validation_status = excluded.factor_validation_status "
+    "where not (mart.issuer_analyst_ratings.availability_status = 'available' "
+    "and excluded.availability_status <> 'available' "
+    "and exists (select 1 from unnest(excluded.reason_codes) as code where starts_with(code, 'fetch_error:')))"
+)
+
+_INSERT_WITH_TARGETS_SQL = (
+    "insert into mart.issuer_analyst_ratings ("
+    "run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, "
+    "confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status, "
+    "target_price, target_high, target_low, track_record_score"
+    ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do update set "
+    "cutoff = excluded.cutoff, consensus_rating = excluded.consensus_rating, analysts_count = excluded.analysts_count, "
+    "buy_count = excluded.buy_count, hold_count = excluded.hold_count, sell_count = excluded.sell_count, "
+    "confidence = excluded.confidence, reason_codes = excluded.reason_codes, extractor = excluded.extractor, "
+    "availability_status = excluded.availability_status, source_evidence_status = excluded.source_evidence_status, "
+    "factor_validation_status = excluded.factor_validation_status, target_price = excluded.target_price, "
+    "target_high = excluded.target_high, target_low = excluded.target_low, "
+    "track_record_score = excluded.track_record_score "
     "where not (mart.issuer_analyst_ratings.availability_status = 'available' "
     "and excluded.availability_status <> 'available' "
     "and exists (select 1 from unnest(excluded.reason_codes) as code where starts_with(code, 'fetch_error:')))"
@@ -380,8 +399,13 @@ def _ticker_row(
     return consensus_row, None
 
 
-def _unpack_track_record(rec: AnalystTrackRecord) -> tuple[Any, int, int, int, int, Decimal, list[str], str]:
+def _unpack_track_record(
+    rec: AnalystTrackRecord, rating_items: Sequence[AnalystRatingItem] = ()
+) -> tuple[
+    Any, int, int, int, int, Decimal, list[str], str, Decimal | None, Decimal | None, Decimal | None, Decimal | None
+]:
     avail = "available" if not rec.result.flags and rec.consensus_rating is not None else "unavailable"
+    high, low, mean = _target_stats(rating_items) if rating_items else (None, None, None)
     return (
         rec.consensus_rating,
         rec.ratings_count,
@@ -391,6 +415,10 @@ def _unpack_track_record(rec: AnalystTrackRecord) -> tuple[Any, int, int, int, i
         rec.result.confidence,
         list(rec.result.flags),
         avail,
+        mean,
+        high,
+        low,
+        rec.track_record_score,
     )
 
 
@@ -402,16 +430,22 @@ def materialize_analyst_ratings(
     ratings_data: Sequence[dict[str, Any] | AnalystTrackRecord],
 ) -> int:
     as_of, source_status, val_status = unbacked_status_values(cutoff)
+    store_targets = has_column(connection, "mart", "issuer_analyst_ratings", "target_price")
     for item in ratings_data:
         rating_items: Sequence[AnalystRatingItem] = ()
         if isinstance(item, AnalystTrackRecord):
             issuer_id, extractor = item.entity_id, "origin:moomoo:v1"
-            fields = _unpack_track_record(item)
+            base_fields = _unpack_track_record(item)
+            fields, extra = base_fields[:8], base_fields[8:]
         else:
             issuer_id, extractor = str(item["issuer_id"]), str(item.get("extractor", "origin:moomoo:v1"))
             if "ratings" in item:
                 rating_items = item["ratings"]
-                fields = _unpack_track_record(analyst_track_record(rating_items, entity_id=issuer_id, as_of=as_of))
+                base_fields = _unpack_track_record(
+                    analyst_track_record(rating_items, entity_id=issuer_id, as_of=as_of),
+                    rating_items,
+                )
+                fields, extra = base_fields[:8], base_fields[8:]
             else:
                 if isinstance(item.get("rating_items"), Sequence):
                     rating_items = item["rating_items"]
@@ -434,10 +468,26 @@ def materialize_analyst_ratings(
                         item.get("availability_status", "available" if consensus_rating is not None else "unavailable")
                     ),
                 )
+                high, low, mean = _target_stats(rating_items) if rating_items else (None, None, None)
+                t_mean = item.get("target_price") if item.get("target_price") is not None else item.get("target_mean")
+                target_mean = Decimal(str(t_mean)) if t_mean is not None else mean
+                target_high = Decimal(str(item["target_high"])) if item.get("target_high") is not None else high
+                target_low = Decimal(str(item["target_low"])) if item.get("target_low") is not None else low
+                track_score = (
+                    Decimal(str(item["track_record_score"])) if item.get("track_record_score") is not None else None
+                )
+                extra = (target_mean, target_high, target_low, track_score)
         canonical_id = require_canonical_issuer_id(issuer_id)
-        connection.execute(
-            _INSERT_SQL, (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, val_status)
-        )
+        if store_targets:
+            connection.execute(
+                _INSERT_WITH_TARGETS_SQL,
+                (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, val_status, *extra),
+            )
+        else:
+            connection.execute(
+                _INSERT_SQL,
+                (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, val_status),
+            )
     return len(ratings_data)
 
 

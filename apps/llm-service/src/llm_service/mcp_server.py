@@ -79,8 +79,11 @@ from llm_service.services.panel_service import (
 from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
     PostgresBacktestReader,
+    TriggerBacktestRequest,
+    TriggerBacktestResponse,
     backtest_run_limitations,
     call_strategy_repository,
+    trigger_backtest_run,
 )
 
 __all__ = [
@@ -126,6 +129,13 @@ class StrategyBacktestsToolRequest(_ToolModel):
 
 class StrategyBacktestDetailToolRequest(_ToolModel):
     run_id: str
+
+
+class StrategyBacktestTriggerToolRequest(_ToolModel):
+    definition_resource: str | None = None
+    start_cutoff: str | None = None
+    end_cutoff: str | None = None
+    executed_at: str | None = None
 
 
 class EntitiesHoldingsToolRequest(_ToolModel):
@@ -399,6 +409,22 @@ def build_mcp_server(
     )
     def strategy_backtest_detail(request: StrategyBacktestDetailToolRequest) -> dict[str, Any]:
         return active_backtest.get_backtest_report(run_id=request.run_id)
+
+    @server.tool(
+        name="strategy_backtest_trigger",
+        description="Queue a governed nightly backtest pipeline execution via staging.pipeline_trigger_requests.",
+    )
+    def strategy_backtest_trigger(request: StrategyBacktestTriggerToolRequest) -> TriggerBacktestResponse:
+        _require_mcp_admin()
+        return trigger_backtest_run(
+            MCP_OWNER_PRINCIPAL_ID,
+            TriggerBacktestRequest(
+                definition_resource=request.definition_resource,
+                start_cutoff=request.start_cutoff,
+                end_cutoff=request.end_cutoff,
+                executed_at=request.executed_at,
+            ),
+        )
 
     # --- Domain 3: entities (6) ---
 

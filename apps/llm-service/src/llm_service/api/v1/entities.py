@@ -71,6 +71,7 @@ def analyst_ratings(
 @router.get("/{issuer_id:path}", response_model=EntityDetailResponse, operation_id="entities_detail")
 def entity_detail(
     issuer_id: str,
+    convention: str | None = Query(default=None),
     principal: PrincipalRecord = Depends(require_principal),
 ) -> EntityDetailResponse:
-    return get_entity_detail(access_context_for(principal), issuer_id=issuer_id)
+    return get_entity_detail(access_context_for(principal), issuer_id=issuer_id, convention=convention)

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from llm_service.api.v1._deps import require_principal
+from llm_service.api.v1._deps import require_admin, require_principal
 from llm_service.services.auth_service import PrincipalRecord, access_context_for
 from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
     BacktestDetailResponse,
     BacktestRunsResponse,
     RankingsResponse,
+    TriggerBacktestRequest,
+    TriggerBacktestResponse,
     get_backtest_detail,
     get_rankings,
     list_backtest_runs,
+    trigger_backtest_run,
 )
 
 router = APIRouter(prefix="/api/v1/strategy", tags=["strategy"])
@@ -45,6 +48,22 @@ def backtests_list(
     _principal: PrincipalRecord = Depends(require_principal),
 ) -> BacktestRunsResponse:
     return list_backtest_runs(limit=limit, strategy_key=strategy_key)
+
+
+@router.post(
+    "/backtests/trigger",
+    response_model=TriggerBacktestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="strategy_backtest_trigger",
+)
+def backtest_trigger(
+    payload: TriggerBacktestRequest | None = None,
+    admin: PrincipalRecord = Depends(require_admin),
+) -> TriggerBacktestResponse:
+    try:
+        return trigger_backtest_run(admin.principal_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
 
 @router.get("/backtests/{run_id}", response_model=BacktestDetailResponse, operation_id="strategy_backtest_detail")

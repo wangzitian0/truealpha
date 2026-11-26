@@ -24,6 +24,10 @@ class HoldingLine:
     availability: str | None
     confidence: Decimal | None = None
     availability_status: str | None = None
+    revenue: Decimal | None = None
+    gross_profit: Decimal | None = None
+    employees: Decimal | None = None
+    gppe: Decimal | None = None
 
     @property
     def resolved(self) -> bool:
@@ -49,6 +53,10 @@ class FundConsolidation:
     valued_weight: Decimal
     lines: int
     valued_lines: int
+    virtual_revenue: Decimal | None = None
+    virtual_gross_profit: Decimal | None = None
+    virtual_employees: Decimal | None = None
+    virtual_gppe: Decimal | None = None
 
     @property
     def unresolved_weight(self) -> Decimal:
@@ -67,6 +75,20 @@ def _mass(lines: Sequence[HoldingLine], predicate: Callable[[HoldingLine], bool]
     return sum((line.weight for line in lines if line.weight is not None and predicate(line)), _ZERO)
 
 
+def _virtual_metric(lines: Sequence[HoldingLine], attr: str) -> Decimal | None:
+    weighted_terms: list[tuple[Decimal, Decimal]] = []
+    for line in lines:
+        val = getattr(line, attr)
+        if line.resolved and line.weight is not None and line.weight > _ZERO and val is not None:
+            weighted_terms.append((line.weight, val))
+    if not weighted_terms:
+        return None
+    denom = sum((w for w, _ in weighted_terms), _ZERO)
+    if denom <= _ZERO:
+        return None
+    return sum((w * v for w, v in weighted_terms), _ZERO) / denom
+
+
 @factor("etf_virtual_company", kind="base", module=5)
 def consolidate_fund(
     lines: Sequence[HoldingLine],
@@ -79,9 +101,25 @@ def consolidate_fund(
     resolved = _mass(lines, lambda line: line.resolved)
     valued = _mass(lines, lambda line: line.valued)
     valued_lines = [line for line in lines if line.valued]
+    v_rev = _virtual_metric(lines, "revenue")
+    v_gp = _virtual_metric(lines, "gross_profit")
+    v_emp = _virtual_metric(lines, "employees")
+    v_gppe = _virtual_metric(lines, "gppe")
 
     def _wrap(result: FactorResult) -> FundConsolidation:
-        return FundConsolidation(fund_id, result, total, resolved, valued, len(lines), len(valued_lines))
+        return FundConsolidation(
+            fund_id,
+            result,
+            total,
+            resolved,
+            valued,
+            len(lines),
+            len(valued_lines),
+            virtual_revenue=v_rev,
+            virtual_gross_profit=v_gp,
+            virtual_employees=v_emp,
+            virtual_gppe=v_gppe,
+        )
 
     if resolved < definition.minimum_resolved_weight:
         return _wrap(refused_factor_result("etf_virtual_company", fund_id, as_of, ["resolved_weight_below_minimum"]))
