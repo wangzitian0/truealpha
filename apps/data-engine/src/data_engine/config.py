@@ -21,6 +21,8 @@ class Settings(RuntimeSettings):
     def capture_environment(self) -> CaptureEnvironment:
         return CaptureEnvironment(self.environment_tier.value)
 
+    # Retained for expand-contract parity with infra2 20.data_engine and prod v0.3.6.
+    release_id: str = _f("", "release", "release")
     image_digest: str = _f("", "release", "release")
     configuration_sha256: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.CONFIGURATION_SHA256.value)
     capture_approved_by: str = _f(

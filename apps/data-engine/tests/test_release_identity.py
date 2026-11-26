@@ -184,29 +184,36 @@ def test_the_settings_model_resolves_canonical_release_keys(
 ) -> None:
     """Settings resolves canonical SDK environment variables (#1367)."""
     digest = "sha256:" + "d" * 64
+    release_id = "release-manifest:" + "e" * 64
     config_sha = "a" * 64
     monkeypatch.setenv("IMAGE_DIGEST", digest)
+    monkeypatch.setenv("RELEASE_ID", release_id)
     monkeypatch.setenv("CAPTURE_APPROVED_BY", "zitian")
     monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
     monkeypatch.setenv("LLM_SMALL_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
     assert settings.image_digest == digest
+    assert settings.release_id == release_id
     assert settings.capture_approved_by == "zitian"
     assert settings.configuration_sha256 == config_sha
     assert settings.llm_small_model == "glm-5.3-flash"
     assert "migrations_database_url" not in Settings.model_fields
-    assert "release_id" not in Settings.model_fields
 
 
 def test_retired_aliases_do_not_populate_release_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TRUEALPHA_CAPTURE_APPROVED_BY no longer populates Settings (#1727)."""
-    monkeypatch.delenv("CAPTURE_APPROVED_BY", raising=False)
+    """RELEASE_MANIFEST_ID and TRUEALPHA_CAPTURE_APPROVED_BY no longer populate Settings (#1727)."""
+    for key in ("RELEASE_ID", "CAPTURE_APPROVED_BY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RELEASE_MANIFEST_ID", "release-manifest:" + "e" * 64)
     monkeypatch.setenv("TRUEALPHA_CAPTURE_APPROVED_BY", "zitian")
     retired = Settings(_env_file=None)
+    assert retired.release_id == Settings.model_fields["release_id"].default
     assert retired.capture_approved_by == Settings.model_fields["capture_approved_by"].default
 
+    monkeypatch.setenv("RELEASE_ID", "release-manifest:" + "f" * 64)
     monkeypatch.setenv("CAPTURE_APPROVED_BY", "wangzitian0")
     canonical = Settings(_env_file=None)
+    assert canonical.release_id == "release-manifest:" + "f" * 64
     assert canonical.capture_approved_by == "wangzitian0"
 
 
@@ -241,7 +248,7 @@ def test_the_entrypoint_waits_for_secrets_then_execs_the_command(tmp_path: Path)
         name: "x"
         for name in (
             "CAPTURE_APPROVED_BY CONFIGURATION_SHA256 ENVIRONMENT GIT_COMMIT_SHA "
-            "IMAGE_DIGEST S3_ENDPOINT SEC_USER_AGENT"
+            "IMAGE_DIGEST RELEASE_ID S3_ENDPOINT SEC_USER_AGENT"
         ).split()
     }
     ok = subprocess.run(
