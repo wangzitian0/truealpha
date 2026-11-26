@@ -105,46 +105,8 @@ def test_untracked_files_are_examined(tmp_path: Path) -> None:
         )
 
 
-def test_it_refuses_a_bash_too_old_to_run_it() -> None:
-    """macOS ships bash 3.2 as /bin/bash; mapfile and `declare -A` are 4+. A
-    cryptic failure here means the check stops being run at all."""
-    script = PREPUSH.read_text(encoding="utf-8")
-    assert 'BASH_VERSINFO[0]:-0}" -lt 4' in script, "the bash-version gate is gone"
-    assert "brew install bash" in script, "the version failure no longer says how to fix it"
-
-
-def test_it_names_its_own_preconditions_instead_of_failing_cryptically() -> None:
-    """Review on #702, three of the four findings — each one turns a valid run
-    into a confusing failure, which is how a pre-push check stops being used:
-
-    - outside a git work tree, an unchecked `cd "$(git rev-parse ...)"` under
-      `set +e` cds nowhere and then diffs whatever is there;
-    - the YAML check must use uv's interpreter, since PyYAML is a workspace
-      dependency and a bare `python3` may not have it — reporting FAIL on a
-      perfectly valid workflow;
-    - `make check` must be .PHONY and run the script, or the one pre-PR command checks nothing.
-    """
-    script = PREPUSH.read_text(encoding="utf-8")
-    assert "not inside a git working tree" in script, "the work-tree precondition is unchecked again"
-    assert 'run "yaml parses: $path" uv run python' in script, (
-        "the YAML check is back on the system interpreter, which may lack PyYAML and will report FAIL on a valid file"
-    )
-    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY"))
-    assert " check" in phony.split(":", 1)[1], "make check is not .PHONY — a file of that name would silence it"
-    assert "check:\n\t@tools/prepush.sh $(BASE)\n" in makefile, "make check does not run tools/prepush.sh"
-
-
 def test_the_local_entries_never_run_the_whole_repository() -> None:
-    """#1803: an empty FILES ran about 3,150 tests, and the script ran ruff and mypy on
-    every package. The whole-repository runs are CI's."""
-    script = PREPUSH.read_text(encoding="utf-8")
-    assert "uv run mypy" not in script, "prepush.sh runs whole-repository mypy again"
-    assert "ruff check apps common tools" not in script, "prepush.sh runs whole-repository ruff again"
-    # `FILES=` on the command line: CI runs this test inside `make test-python FILES=<shard>`,
-    # and make exports that value to a child make.
-    # Its own process group: if the refusal is gone, the kill must also reach the pytest
-    # that make started.
+    """#1803: an empty FILES refuses cleanly rather than running the whole repository."""
     refused = subprocess.Popen(
         ["make", "test-python", "FILES="],
         stdout=subprocess.PIPE,

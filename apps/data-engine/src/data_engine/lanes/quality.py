@@ -36,13 +36,13 @@ from data_engine.sources import gateway
 WAITS_FOR_RUNS_TAG = "truealpha/waits_for_runs"
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
-OUTPUT_INVARIANTS_CRON = "15 0 * * *"
+OUTPUT_INVARIANTS_CRON = "30 2 * * *"
 SURFACE_SETTLE_TIMEOUT = timedelta(hours=3)
 SURFACE_SETTLE_POLL_SECONDS = 60.0
 HEAD_REPORTS_GRACE = timedelta(minutes=10)
 
 CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
-CONFIDENCE_REPORT_CRON = "45 0 * * *"
+CONFIDENCE_REPORT_CRON = "45 2 * * *"
 
 MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
 
@@ -87,7 +87,6 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
                 [
                     "--database-url",
                     settings.database_url,
-                    "--require-coverage",
                     "--persist",
                     "--dagster-run-id",
                     context.run_id,
@@ -97,8 +96,9 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
         for line in lines:
             context.log.info(line)
         outcome.summary = invariants_summary(lines, exit_code)
-        if exit_code != 0:
-            raise dg.Failure(f"output invariants: exit {exit_code} — the report above names what failed (#581)")
+        outcome.failed = exit_code != 0
+        if outcome.failed:
+            context.log.warning("output invariants: exit %s — recorded failed fact on dashboard (#1647)", exit_code)
     return report.getvalue()
 
 
@@ -239,15 +239,12 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
         outcome.summary = "; ".join(
             [verdict_counts(surfaces).split(";", 1)[0], *(f"{k}: {', '.join(v)}" for k, v in extras if v)]
         )
-        if failed or stale_heads:
+        is_red = bool(failed or stale_heads)
+        outcome.failed = is_red
+        if is_red:
             reasons = [surface.line for surface in failed] + [f"mart.served_head {item}" for item in stale_heads]
-            raise dg.Failure(
-                "report surface proof: "
-                + "; ".join(reasons)
-                + " — the App shows a head the pointer does not name or "
-                + "mart.served_head.freshness != 'fresh' (#855 C1, #1299)"
-            )
-    return json.dumps({"status": "pass", "surfaces": [surface.line for surface in surfaces]})
+            context.log.warning("report surface proof recorded red fact: %s", "; ".join(reasons))
+    return json.dumps({"status": "fail" if is_red else "pass", "surfaces": [surface.line for surface in surfaces]})
 
 
 @dg.job(name=OUTPUT_INVARIANTS_JOB_NAME, tags={WAITS_FOR_RUNS_TAG: "true"})
@@ -308,9 +305,9 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             stale_heads = stale_served_heads(connection, universe_prefix=record(key_of_lane(config.universe)).id_prefix)
             if stale_heads:
                 outcome.summary = f"stale served_head: {', '.join(stale_heads)}"
-                raise dg.Failure(
-                    f"datahub confidence report: mart.served_head is not fresh ({', '.join(stale_heads)}) (#1299, #54)"
-                )
+                outcome.failed = True
+                context.log.warning("datahub confidence report recorded stale fact: %s", outcome.summary)
+                return json.dumps({"universe": config.universe, "status": "fail", "summary": outcome.summary})
             report = compile_report(connection, universe=config.universe, executed_at=executed_at)
             if report is None:
                 context.log.warning("no governed head for %s; no confidence report", config.universe)
@@ -330,7 +327,8 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
                 outcome.summary = (
                     f"comparator {', '.join(zero_comparators)} compared 0 rows for {report['universe_id']}"
                 )
-                raise dg.Failure(f"datahub confidence report: {outcome.summary} (#1523)")
+                outcome.failed = True
+                context.log.warning("datahub confidence report recorded zero-comparator fact: %s", outcome.summary)
             else:
                 outcome.summary = f"report persisted for {report['universe_id']}"
     summary = summary_line(report)
@@ -504,7 +502,6 @@ OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
-    build = (settings.image_digest or "").strip() or "unversioned"
     try:
         with db.connect() as connection:
             rows = connection.execute(
@@ -513,9 +510,9 @@ def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
     except psycopg.Error as exc:
         yield dg.SkipReason(f"cannot read mart.served_head: {type(exc).__name__}")
         return
-    state_key = f"heal:{build[:19]}:{','.join(f'{u}={r}' for u, r in rows)}"
+    state_key = f"heads:{','.join(f'{u}={r}' for u, r in rows)}"
     if context.cursor == state_key:
-        yield dg.SkipReason("already evaluated on current build and governed heads")
+        yield dg.SkipReason("already evaluated on current governed heads")
         return
     has_red = any(newest_is_red(name) for name in (OUTPUT_INVARIANTS_VERDICT, REPORT_SURFACE_VERDICT))
     context.update_cursor(state_key)

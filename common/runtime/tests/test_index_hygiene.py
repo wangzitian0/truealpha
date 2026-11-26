@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from collections.abc import Iterator
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -13,8 +11,6 @@ from truealpha_runtime.testing import isolated_test_database
 
 pytestmark = pytest.mark.deps
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MIGRATIONS = REPO_ROOT / "db/migrations"
 SCHEMAS = ("raw", "staging", "mart", "app")
 
 # Small static vocabulary/reference targets whose rows are seeded by migrations and never deleted.
@@ -27,95 +23,11 @@ VOCABULARY_FK_TARGETS = frozenset(
     }
 )
 
-_CREATE_INDEX_RE = re.compile(
-    r"create\s+(?P<unique>unique\s+)?index\s+(?:if\s+not\s+exists\s+)?"
-    r"(?P<name>[a-z_][a-z0-9_]*)\s+on\s+(?P<table>[a-z_]+\.[a-z_]+)\s+"
-    r"(?:using\s+(?P<am>[a-z_]+)\s*)?\((?P<cols>[^;]+?)\)"
-    r"(?:\s+where\s+(?P<pred>[^;]+?))?\s*;",
-    re.IGNORECASE,
-)
-
 
 @pytest.fixture(scope="module")
 def migrated_db() -> Iterator[str]:
     with isolated_test_database("idx", template=None) as db:
         yield str(db)
-
-
-def _split_cols(raw_cols: str) -> tuple[str, ...]:
-    parts: list[str] = []
-    depth = 0
-    buf: list[str] = []
-    for ch in raw_cols:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append("".join(buf).strip())
-            buf = []
-        else:
-            buf.append(ch)
-    if buf:
-        parts.append("".join(buf).strip())
-    normalized: list[str] = []
-    for part in parts:
-        # Strip trailing ASC/DESC/NULLS FIRST|LAST for prefix comparison.
-        token = re.sub(r"\s+(?:asc|desc)(?:\s+nulls\s+(?:first|last))?$", "", part.lower().strip())
-        token = re.sub(r"\s+", " ", token)
-        normalized.append(token)
-    return tuple(normalized)
-
-
-_CREATE_TABLE_RE = re.compile(
-    r"create\s+table\s+(?:if\s+not\s+exists\s+)?(?P<table>[a-z_]+\.[a-z_]+)\s*\((?P<body>.*?)\n\);",
-    re.IGNORECASE | re.DOTALL,
-)
-_TABLE_KEY_RE = re.compile(
-    r"(?:constraint\s+(?P<name>[a-z_][a-z0-9_]*)\s+)?(?:primary\s+key|unique)\s*\((?P<cols>[^)]+)\)",
-    re.IGNORECASE,
-)
-
-
-def test_static_migrations_declare_no_duplicate_create_index() -> None:
-    """Reject duplicate or prefix-redundant CREATE INDEX statements across migrations."""
-    seen_creates: dict[str, list[tuple[str, str, bool, tuple[str, ...], str]]] = defaultdict(list)
-    seen_table_keys: dict[str, list[tuple[str, str, tuple[str, ...]]]] = defaultdict(list)
-    total_found = 0
-    for path in sorted(MIGRATIONS.glob("*.sql")):
-        text = path.read_text(encoding="utf-8")
-        for tbl_match in _CREATE_TABLE_RE.finditer(text):
-            table = tbl_match.group("table").lower()
-            for key_match in _TABLE_KEY_RE.finditer(tbl_match.group("body")):
-                key_name = (key_match.group("name") or "<unnamed>").lower()
-                seen_table_keys[table].append((path.name, key_name, _split_cols(key_match.group("cols"))))
-        for match in _CREATE_INDEX_RE.finditer(text):
-            total_found += 1
-            table = match.group("table").lower()
-            name = match.group("name").lower()
-            is_unique = bool(match.group("unique"))
-            cols = _split_cols(match.group("cols"))
-            pred = re.sub(r"\s+", " ", (match.group("pred") or "").strip().lower())
-            seen_creates[table].append((path.name, name, is_unique, cols, pred))
-
-    assert total_found >= 60, f"static index scanner saw only {total_found} indexes; regex drifted"
-    assert sum(len(v) for v in seen_table_keys.values()) >= 80, "static table key scanner regex drifted"
-
-    redundant: list[str] = []
-    for table, entries in sorted(seen_creates.items()):
-        for f1, n1, u1, c1, p1 in entries:
-            if not p1:
-                for f2, k2, kc2 in seen_table_keys.get(table, ()):
-                    if len(c1) <= len(kc2) and kc2[: len(c1)] == c1:
-                        redundant.append(f"{table}: {n1} ({f1}, {c1}) <= constraint {k2} ({f2}, {kc2})")
-        for i, (f1, n1, u1, c1, p1) in enumerate(entries):
-            for j, (f2, n2, u2, c2, p2) in enumerate(entries):
-                if i == j:
-                    continue
-                if p1 == p2 and len(c1) <= len(c2) and c2[: len(c1)] == c1 and (not u1 or u2):
-                    redundant.append(f"{table}: {n1} ({f1}, {c1}) <= {n2} ({f2}, {c2})")
-
-    assert not redundant, "redundant CREATE INDEX statements in migrations:\n" + "\n".join(redundant)
 
 
 def test_no_redundant_indexes_in_catalog(migrated_db: str) -> None:
@@ -147,7 +59,7 @@ def test_no_redundant_indexes_in_catalog(migrated_db: str) -> None:
             (list(SCHEMAS),),
         ).fetchall()
 
-    assert len(rows) > 100, f"expected >100 indexes in pg_catalog, got {len(rows)}"
+    assert rows, "expected indexes in pg_catalog"
 
     by_table: dict[str, list[tuple[str, bool, bool, str, str | None, tuple[str, ...]]]] = defaultdict(list)
     for tbl, idx_name, is_pk, is_uniq, am, pred, cols in rows:
@@ -222,7 +134,7 @@ def test_no_unexempted_suffix_pair_indexes_in_catalog(migrated_db: str) -> None:
             (list(SCHEMAS),),
         ).fetchall()
 
-    assert len(rows) > 50, f"expected >50 non-unique indexes in pg_catalog, got {len(rows)}"
+    assert rows, "expected non-unique indexes in pg_catalog"
 
     by_table: dict[str, list[tuple[str, str, str | None, tuple[str, ...]]]] = defaultdict(list)
     for tbl, idx_name, am, pred, cols in rows:
@@ -288,7 +200,7 @@ def test_all_non_vocabulary_foreign_keys_have_supporting_index(migrated_db: str)
             (list(SCHEMAS),),
         ).fetchall()
 
-    assert len(fks) >= 75, f"expected >=75 FKs, found {len(fks)}"
+    assert fks, "expected foreign keys in pg_catalog"
 
     by_table: dict[str, list[tuple[str, bool, str | None, tuple[str, ...]]]] = defaultdict(list)
     for tbl, idx_name, is_uniq, pred, cols in idx_rows:

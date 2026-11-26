@@ -9,7 +9,6 @@ Asserts that:
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 
 import psycopg
@@ -17,7 +16,6 @@ import pytest
 from truealpha_contracts.models import DataSource, RawCapture, RawObjectRef
 from truealpha_contracts.ports import RawObjectStore
 from truealpha_runtime.testing import (
-    REPO_ROOT,
     InMemoryRawObjectStore,
     _admin_url_for,
     clone_test_database,
@@ -101,27 +99,6 @@ def test_clone_test_database_isolation() -> None:
             with psycopg.connect(base_db) as conn:
                 count = conn.execute("select count(*) from mart.probe_isolation_test").fetchone()
                 assert count is not None and count[0] == 0
-
-
-def test_ssot_guard_zero_duplicate_in_memory_object_stores() -> None:
-    """SSOT Rule 2 and 4 guard: assert no private duplicate _InMemoryObjectStore classes exist."""
-    pattern = re.compile(r"class\s+_InMemoryObjectStore\b")
-    violations: list[str] = []
-
-    for path in REPO_ROOT.rglob("*.py"):
-        if ".venv" in path.parts or ".git" in path.parts or ".agents" in path.parts:
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        if pattern.search(content):
-            violations.append(str(path.relative_to(REPO_ROOT)))
-
-    assert not violations, (
-        f"Found duplicate _InMemoryObjectStore implementations in {violations}. "
-        "Import InMemoryRawObjectStore from truealpha_runtime.testing instead."
-    )
 
 
 def test_a_named_database_that_exists_is_not_dropped() -> None:

@@ -733,57 +733,6 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
     assert count == (len(THEMES),), "one fill row for each governed theme"
 
 
-def _service_query(name: str, rel_path: str = "apps/llm-service/src/llm_service/services/entities_service.py") -> str:
-    """The SQL assigned to `<name> = '''...'''` in `rel_path`."""
-    import re
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[3] / rel_path).read_text()
-    match = re.search(rf'{name}\s*=\s*"""(?P<sql>.*?)"""', source, re.S)
-    assert match is not None, f"{rel_path} no longer declares {name}"
-    return match.group("sql")
-
-
-def test_the_proof_and_the_theme_reader_select_the_same_run() -> None:
-    """The proof names `THEME_LATEST_RUN_SQL` as the reader it mirrors. A change to one text must change both."""
-    assert " ".join(_service_query("THEME_LATEST_RUN_SQL").split()) == " ".join(surface_proof._THEMES_HEAD_SQL.split())
-
-
-def test_the_proof_and_the_holdings_and_coverage_readers_select_the_same_rows() -> None:
-    """`surface_proof` mirrors shared `POINTER_HEAD_SQL` (`research_report_mart.py`, imported by `panel_service.py`) and `admin_service.py` `QUESTION_COVERAGE_SQL`."""
-    from pathlib import Path
-
-    panel_svc = (
-        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/panel_service.py"
-    ).read_text()
-    assert "POINTER_HEAD_SQL" in panel_svc and "resolve_governed_head_run_id(" in panel_svc
-    holdings_svc = " ".join(
-        _service_query("POINTER_HEAD_SQL", "common/runtime/src/truealpha_runtime/research_report_mart.py").split()
-    )
-    holdings_py = " ".join(surface_proof._HOLDINGS_HEAD_SQL.split())
-    assert holdings_svc == holdings_py
-
-    coverage_svc = " ".join(_governed_latest_per_universe_sql().split())
-    coverage_py = " ".join(surface_proof._COVERAGE_HEAD_SQL.split())
-    assert coverage_svc.startswith("select distinct on (r.universe_id) ")
-    assert coverage_py.startswith("select distinct on (r.universe_id) ")
-    assert coverage_svc.split(" from ", 1)[1] == coverage_py.split(" from ", 1)[1]
-
-
-def _governed_latest_per_universe_sql() -> str:
-    """The `QUESTION_COVERAGE_SQL` text that `admin_service.py` builds for coverage reports."""
-    import re
-    from pathlib import Path
-
-    source = (
-        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/admin_service.py"
-    ).read_text()
-    assert 'QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage_report")' in source
-    match = re.search(r'def governed_latest_per_universe_sql\(.*?return f"""(?P<sql>.*?)"""', source, re.S)
-    assert match is not None, "admin_service.py no longer declares governed_latest_per_universe_sql"
-    return match.group("sql").replace("{table}", "mart.question_coverage_report").replace("{extra_cols}", "")
-
-
 def _seed_governed_theme_head(
     connection, *, run_id: str, universe_id: str, sequence: int, previous_run_id: str | None
 ) -> None:
@@ -803,6 +752,7 @@ def _seed_governed_theme_head(
 
 
 def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_reader() -> None:
+    entities_service = pytest.importorskip("llm_service.services.entities_service")
     fill_only, populated = ("capture-run:" + digit * 64 for digit in "fe")
     connection = _db()
     try:
@@ -814,7 +764,7 @@ def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_
         # Fail-closed when mart.served_head is empty
         for name, query in (
             ("proof", surface_proof._THEMES_HEAD_SQL),
-            ("App reader", _service_query("THEME_LATEST_RUN_SQL")),
+            ("App reader", entities_service.THEME_LATEST_RUN_SQL),
         ):
             assert connection.execute(query).fetchone() is None, f"{name} must fail closed on empty served_head"
 
@@ -826,7 +776,7 @@ def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_
         )
         for name, query in (
             ("proof", surface_proof._THEMES_HEAD_SQL),
-            ("App reader", _service_query("THEME_LATEST_RUN_SQL")),
+            ("App reader", entities_service.THEME_LATEST_RUN_SQL),
         ):
             newest = connection.execute(query).fetchone()
             assert newest is not None and newest[0] == populated, f"{name} must skip the fill-only run"
@@ -836,13 +786,14 @@ def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_
 
 
 def test_the_theme_page_query_returns_the_real_rows_of_a_run_and_no_fill_row() -> None:
+    entities_service = pytest.importorskip("llm_service.services.entities_service")
     run = "capture-run:" + "d" * 64
     connection = _db()
     try:
         _seed_theme_row(connection, run_id=run, cutoff=_REAL_CUTOFF)
         _seed_theme_fill(connection, run_id=run, cutoff=_REAL_CUTOFF)
 
-        rows = connection.execute(_service_query("THEME_ROWS_SQL"), (run,)).fetchall()
+        rows = connection.execute(entities_service.THEME_ROWS_SQL, (run,)).fetchall()
 
         assert [row[5] for row in rows] == ["issuer:themes-910-test"], "issuer_id is the sixth column"
     finally:

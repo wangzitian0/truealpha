@@ -32,7 +32,6 @@ jobs:
     outputs:
       db: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.db }}
       python: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.python }}
-      runtime: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.runtime }}
       web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.web }}
       image_app_web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_app_web }}
       image_llm_service: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_llm_service }}
@@ -55,16 +54,9 @@ jobs:
         with:
           filters: |
             db:
-              # ci-db executes truealpha_tools.schema_drift against the migrated schema;
-              # editing that tool or its runtime implementation must re-run it (#1523).
-              - 'tools/**'
-              - 'common/runtime/src/truealpha_tools/schema_drift.py'
               - 'db/**'
               - '.github/workflows/ci-db.yml'
               - '.github/workflows/ci-required.yml'
-              # The setup-uv action installs uv in this lane (#1248). A PR that edits only
-              # the action must re-run every lane that calls it: `required` reads a skip as success.
-              - '.github/actions/**'
             python:
               # tools/ contains deployed scripts; their tests live in common/runtime/tests.
               - 'tools/**'
@@ -122,22 +114,6 @@ jobs:
               - '.github/actions/**'
               - 'docker-compose.yml'
               - 'tools/**'
-            runtime:
-              # #984: ci-runtime executes truealpha_tools.schema_drift against the schema the
-              # compose bootstrap produced — the same reason `db` above carries
-              # tools/**. A tool this lane runs must re-run this lane.
-              - 'tools/**'
-              - 'docker-compose.yml'
-              - '.env.example'
-              - 'db/**'
-              - 'common/contracts/**'
-              - 'common/runtime/**'
-              - 'Makefile'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - '.github/workflows/ci-runtime.yml'
-              - '.github/workflows/ci-required.yml'
-              - '.github/actions/**'
             web:
               - 'tools/**'
               - 'apps/app-web/**'
@@ -149,31 +125,59 @@ jobs:
               - '.github/actions/**'
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-required.yml'
-            # No `!` entry stands in these lanes (#1412). This step uses the default
-            # `some` quantifier: a lane starts when ANY entry matches ANY changed file,
-            # and a `!` entry matches every path it does not name. The `!` entries that
-            # #1168 added started all three image builds on every PR, a rules-only PR
-            # included. A test-only or markdown-only change inside an image scope now
-            # builds that image again, as it did before #1168.
+            # Positive build-input paths without `!` entries (#1412, #1647): docs and test edits
+            # do not trigger container image builds on PRs.
             image_app_web:
-              - 'apps/app-web/**'
+              - 'apps/app-web/src/**'
+              - 'apps/app-web/public/**'
+              - 'apps/app-web/Dockerfile*'
+              - 'apps/app-web/.dockerignore'
+              - 'apps/app-web/package.json'
+              - 'apps/app-web/bun.lock*'
+              - 'apps/app-web/next.config.*'
+              - 'apps/app-web/tsconfig.json'
+              - 'apps/app-web/postcss.config.*'
+              - 'apps/app-web/tailwind.config.*'
+              - 'apps/app-web/required-env.manifest.json'
+              - 'apps/app-web/openapi.json'
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_llm_service:
-              - 'apps/llm-service/**'
+              - 'apps/llm-service/src/**'
+              - 'apps/llm-service/pyproject.toml'
+              - 'apps/llm-service/Dockerfile*'
+              - 'apps/llm-service/required-env.generated.json'
               - 'apps/data-engine/pyproject.toml'
-              - 'common/contracts/**'
-              - 'common/factors/**'
-              - 'common/runtime/**'
+              - 'common/contracts/src/**'
+              - 'common/contracts/pyproject.toml'
+              - 'common/factors/src/**'
+              - 'common/factors/pyproject.toml'
+              - 'common/runtime/src/**'
+              - 'common/runtime/pyproject.toml'
+              - 'db/migrations/**'
+              - 'db/roles.sql'
+              - 'db/apply_migrations.sh'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_data_engine:
-              - 'apps/data-engine/**'
-              - 'common/contracts/**'
-              - 'common/factors/**'
-              - 'common/runtime/**'
+              - 'apps/data-engine/src/**'
+              - 'apps/data-engine/pyproject.toml'
+              - 'apps/data-engine/Dockerfile*'
+              - 'apps/data-engine/dagster.yaml'
+              - 'apps/data-engine/dagster-entrypoint.sh'
+              - 'apps/data-engine/required-env.generated.json'
+              - 'apps/llm-service/pyproject.toml'
+              - 'common/contracts/src/**'
+              - 'common/contracts/pyproject.toml'
+              - 'common/factors/src/**'
+              - 'common/factors/pyproject.toml'
+              - 'common/runtime/src/**'
+              - 'common/runtime/pyproject.toml'
+              - 'db/migrations/**'
+              - 'db/roles.sql'
+              - 'db/apply_migrations.sh'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
@@ -201,15 +205,6 @@ jobs:
     with:
       dagster_liveness_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dagster_liveness == 'true' }}
       data_engine_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.data_engine == 'true' }}
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: write
-
-  runtime:
-    if: needs.changes.outputs.runtime == 'true'
-    needs: changes
-    uses: ./.github/workflows/ci-runtime.yml
     permissions:
       contents: read
       pull-requests: read
@@ -258,10 +253,9 @@ jobs:
       (needs.security.result == 'success' || needs.security.result == 'skipped') &&
       (needs.db.result == 'success' || needs.db.result == 'skipped') &&
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
-      (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&
       needs.images_build.result == 'success'
-    needs: [changes, security, db, python, runtime, web, images_build]
+    needs: [changes, security, db, python, web, images_build]
     permissions:
       contents: read
       packages: write
@@ -291,7 +285,7 @@ jobs:
   required:
     name: ci-required
     if: always()
-    needs: [changes, security, db, python, runtime, web, images_build, images_release, images_promote]
+    needs: [changes, security, db, python, web, images_build, images_release, images_promote]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

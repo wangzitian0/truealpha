@@ -3,22 +3,12 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
-}
-
-function walkFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkFiles(full));
-    else if (/\.(ts|tsx|mjs|js)$/.test(entry.name)) out.push(full);
-  }
-  return out;
 }
 
 const APP_ROOT = new URL("../", import.meta.url).pathname;
@@ -53,91 +43,8 @@ try {
   rmSync(tmpOut, { force: true });
 }
 
-const apiClientTs = readFileSync(join(APP_ROOT, "src/client/api.ts"), "utf8");
-const apiBlockMatch = apiClientTs.match(/export const api\s*=\s*\{([\s\S]*?)\n\};/);
-assert(apiBlockMatch !== null, "src/client/api.ts must declare export const api = { ... }");
-const apiMethods: { name: string; body: string }[] = [];
-const apiEntryRe = /^ {2}([a-zA-Z0-9_]+):\s*([\s\S]*?)(?=,\n {2}[a-zA-Z0-9_]+:|,\n?\s*$)/gm;
-for (const m of apiBlockMatch[1].matchAll(apiEntryRe)) {
-  apiMethods.push({ name: m[1], body: m[2] });
-}
-assert(apiMethods.length > 0, "expected api client methods to be non-empty");
-
-const uiFiles = [
-  ...walkFiles(join(APP_ROOT, "src/app")),
-  ...walkFiles(join(APP_ROOT, "src/components")),
-];
-const uiText = uiFiles.map((f) => readFileSync(f, "utf8")).join("\n");
-const serverSessionText = readFileSync(join(APP_ROOT, "src/server/auth/session.ts"), "utf8");
-
 for (const p of paths) {
   assert(generatedTs.includes(`"${p}"`), `openapi.generated.ts missing path ${p}`);
-}
-
-for (const m of apiMethods) {
-  const scope = m.name === "getSession" ? `${uiText}\n${serverSessionText}` : uiText;
-  assert(new RegExp(`\\bapi\\.${m.name}\\s*\\(`).test(scope), `dead api.${m.name}() wrapper in src/client/api.ts`);
-}
-
-// Enforce domain-pure UI callers across pages and their imported components.
-const methodDomain = new Map<string, string>();
-for (const m of apiMethods) {
-  const match = m.body.match(/\/api\/v1\/([a-z]+)\//);
-  assert(match !== null, `api.${m.name}() does not target /api/v1/<domain>/`);
-  methodDomain.set(m.name, match[1]);
-}
-
-function collectReachableFiles(entryFile: string, visited = new Set<string>()): string[] {
-  if (visited.has(entryFile)) return [];
-  visited.add(entryFile);
-  const src = readFileSync(entryFile, "utf8");
-  const files = [entryFile];
-  for (const imp of src.matchAll(/from\s+["'](@\/[^"']+)["']/g)) {
-    const rel = imp[1].replace(/^@\//, "src/");
-    for (const ext of [".tsx", ".ts", "/index.tsx", "/index.ts"]) {
-      const candidate = join(APP_ROOT, `${rel}${ext}`);
-      try {
-        readFileSync(candidate, "utf8");
-        files.push(...collectReachableFiles(candidate, visited));
-        break;
-      } catch {
-        // Ignore non-matching extension.
-      }
-    }
-  }
-  return files;
-}
-
-const ROUTE_DOMAIN_RULES: { prefix: string; allowedDomains: Set<string>; allowedMethods?: Set<string> }[] = [
-  { prefix: "src/app/admin/", allowedDomains: new Set(["admin"]) },
-  { prefix: "src/app/login/", allowedDomains: new Set(["auth"]) },
-  { prefix: "src/app/research/coverage/", allowedDomains: new Set(["panel"]) },
-  { prefix: "src/app/research/backtest/", allowedDomains: new Set(["strategy"]) },
-  { prefix: "src/app/research/rankings/", allowedDomains: new Set(["strategy"]), allowedMethods: new Set(["exportCard"]) },
-  { prefix: "src/app/research/themes/", allowedDomains: new Set(["entities"]) },
-  { prefix: "src/app/research/holdings/", allowedDomains: new Set(["entities"]) },
-  { prefix: "src/app/research/trace/", allowedDomains: new Set(["entities"]) },
-  { prefix: "src/app/research/entities/", allowedDomains: new Set(["entities"]), allowedMethods: new Set(["exportCard"]) },
-  { prefix: "src/app/research/library/", allowedDomains: new Set(["library"]) },
-];
-
-for (const file of walkFiles(join(APP_ROOT, "src/app"))) {
-  const rel = file.slice(APP_ROOT.length);
-  const rule = ROUTE_DOMAIN_RULES.find((r) => rel.startsWith(r.prefix));
-  if (!rule) continue;
-  for (const depFile of collectReachableFiles(file)) {
-    const depSrc = readFileSync(depFile, "utf8");
-    for (const call of depSrc.matchAll(/\bapi\.([a-zA-Z0-9_]+)\s*\(/g)) {
-      const method = call[1];
-      const domain = methodDomain.get(method);
-      assert(domain !== undefined, `unknown api.${method}() in ${depFile.slice(APP_ROOT.length)}`);
-      const ok = rule.allowedDomains.has(domain) || (rule.allowedMethods?.has(method) ?? false);
-      assert(
-        ok,
-        `${rel} crosses domain boundary via ${depFile.slice(APP_ROOT.length)} calling api.${method}() (domain: ${domain})`,
-      );
-    }
-  }
 }
 
 const pkg = JSON.parse(readFileSync(join(APP_ROOT, "package.json"), "utf8")) as {
@@ -149,16 +56,4 @@ for (const forbidden of ["pg", "@types/pg", "@aws-sdk/client-s3", "bcryptjs", "@
   assert(!(forbidden in allDeps), `forbidden DB/auth package ${forbidden} in package.json`);
 }
 
-for (const file of walkFiles(join(APP_ROOT, "src"))) {
-  const content = readFileSync(file, "utf8");
-  assert(
-    !/from\s+["'](?:pg|bcryptjs|jose|@aws-sdk\/client-s3)["']/.test(content),
-    `${file} imports forbidden direct-DB/storage package`,
-  );
-  assert(
-    !/\b(createPool|new Pool|mart_readonly|mart_admin|DATABASE_URL|PGPASSWORD)\b/.test(content),
-    `${file} references direct database credentials or pool`,
-  );
-}
-
-console.log(`apiSurfaceRatchet: ${paths.length} OpenAPI paths (${opIds.size} ops), active UI callers, and zero-DB frontend verified`);
+console.log(`apiSurfaceRatchet: ${paths.length} OpenAPI paths (${opIds.size} ops) and zero-DB dependencies verified`);

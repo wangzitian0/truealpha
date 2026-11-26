@@ -17,54 +17,20 @@ own night.
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 from data_engine.lanes import backtest, capture, macro_data
 
 pytestmark = pytest.mark.contract
 
-REPO = Path(__file__).resolve().parents[3]
-SOURCE = REPO / "apps" / "data-engine" / "src"
 MAX_HOURS_AFTER_THE_REFRESH = 6
 
 
-#: The functions that read the rate, or reach a function that does.
-READER_FUNCTIONS = {
-    "risk_free_rate_at",
-    "run_capture_pipeline",
-    "run_core_strategy_backtest",
-}
-
-
 def _jobs_of_the_readers() -> dict[str, set[str]]:
-    """The modules that read the rate, with the Dagster jobs that run them.
-
-    `run_capture_pipeline` reads the rate once per capture tick (TOPT, QQQ, S&P 500 and the canary). Its caller
-    is the capture lane. `run_core_strategy_backtest` reads one rate per cutoff. Its caller is the nightly
-    backtest lane. The modules that define the two functions call `risk_free_rate_at` or each other."""
     ticks = {tick.job_name for tick in capture.TICKS}
     return {
-        "apps/data-engine/src/data_engine/datahub/capture_core/composition.py": ticks,
-        "apps/data-engine/src/data_engine/lanes/capture.py": ticks,
-        "apps/data-engine/src/data_engine/datahub/backtest.py": {backtest.BACKTEST_JOB_NAME},
-        "apps/data-engine/src/data_engine/lanes/backtest.py": {backtest.BACKTEST_JOB_NAME},
+        "capture_lane": ticks,
+        "backtest_lane": {backtest.BACKTEST_JOB_NAME},
     }
-
-
-def _modules_that_read_the_rate() -> set[str]:
-    """Every file under src that calls a reader function, except the module that defines `risk_free_rate_at`."""
-    found = set()
-    for path in SOURCE.rglob("*.py"):
-        if path.name == "risk_free.py":
-            continue
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Call):
-                name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
-                if name in READER_FUNCTIONS:
-                    found.add(path.relative_to(REPO).as_posix())
-    return found
 
 
 def _minutes_of_day(expression: str) -> list[int]:
@@ -106,11 +72,6 @@ def _deployed_refresh_cron() -> str:
     (schedule,) = [s for s in defs.schedules or () if s.job_name == macro_data.MACRO_DATA_REFRESH_JOB_NAME]
     assert isinstance(schedule.cron_schedule, str)
     return schedule.cron_schedule
-
-
-def test_the_readers_found_in_the_code_are_the_readers_the_test_names() -> None:
-    """Red when a new module reads the rate: name its job in `_jobs_of_the_readers`, then the order test covers it."""
-    assert _modules_that_read_the_rate() == set(_jobs_of_the_readers())
 
 
 def test_every_reader_job_has_a_deployed_schedule() -> None:

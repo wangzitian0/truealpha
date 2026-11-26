@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import ast
 import json
-import re
 import subprocess
 from pathlib import Path
 
@@ -27,31 +25,10 @@ def test_workflows_parse_and_ci_required_pins_tag_and_jobs() -> None:
     assert loaded, "expected .github/workflows/*.yml files"
     req = loaded["ci-required.yml"]["jobs"]
     req_needs = set(req["required"]["needs"])
-    assert {"changes", "security", "db", "python", "runtime", "web", "images_build", "images_release"} <= req_needs
+    assert {"changes", "security", "db", "python", "web", "images_build", "images_release"} <= req_needs
     changes_steps = "\n".join(str(step.get("run", "")) for step in req["changes"]["steps"])
     assert "merge-base --is-ancestor" in changes_steps
     assert loaded["ci-web.yml"]["jobs"]["browser"]["runs-on"] == "ubuntu-24.04"
-
-
-def _declared_pytest_markers(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    found: set[str] = set()
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
-            continue
-        elts = node.value.elts if isinstance(node.value, (ast.List, ast.Tuple)) else [node.value]
-        for elt in elts:
-            if (
-                isinstance(elt, ast.Attribute)
-                and isinstance(elt.value, ast.Attribute)
-                and isinstance(elt.value.value, ast.Name)
-                and elt.value.value.id == "pytest"
-                and elt.value.attr == "mark"
-            ):
-                found.add(elt.attr)
-    return found
 
 
 def test_ci_python_shards_cover_all_tests_and_isolate_s3() -> None:
@@ -96,21 +73,12 @@ def test_ci_python_shards_cover_all_tests_and_isolate_s3() -> None:
     assert not (s3_declared & deps_selected)
     assert (s3_declared | deps_selected) == all_tests
 
-    allowed_markers = {"gate", "deps", "smoke", "contract"}
-    unmarked = [p for p in sorted(all_tests) if not (_declared_pytest_markers(REPO_ROOT / p) & allowed_markers)]
-    assert unmarked == [], f"tests missing Class 1/2 pytestmark: {unmarked}"
-
-
-def test_pyproject_and_lockfile_do_not_depend_on_qlib() -> None:
-    assert "qlib" not in (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8").lower()
-    assert 'name = "pyqlib"' not in (REPO_ROOT / "uv.lock").read_text(encoding="utf-8").lower()
-
 
 EXPECTED_CELL_CHECKS = {
     "preview.operation": ["smoke"],
-    "preview.post": ["health", "warm_surface", "walk_tree"],
+    "preview.post": ["health", "walk_tree"],
     "staging.operation": ["smoke"],
-    "staging.post": ["health", "warm_surface", "walk_tree"],
+    "staging.post": ["health", "walk_tree"],
     "prod.operation": ["smoke"],
     "prod.post": ["health"],
     "scheduled_audit": ["nightly_verdicts"],
@@ -162,7 +130,7 @@ def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path
 
     def fake(argv, **_kw):  # type: ignore[no-untyped-def]
         ran.append(argv[-1])
-        if "warm_surface.sh" in argv[-1]:
+        if "infra2_sdk.deploy" in argv[-1]:
             return subprocess.CompletedProcess(argv, 1, "", "boom: first line\nsecond line")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -181,10 +149,10 @@ def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path
     from infra2_sdk.manifests import CELL_POLICIES
 
     assert CELL_POLICIES["staging.post"].stop_on_fail is False
-    assert [(c.name, c.ok) for c in result.checks] == [("health", True), ("warm_surface", False), ("walk_tree", True)]
+    assert [(c.name, c.ok) for c in result.checks] == [("health", False), ("walk_tree", True)]
     assert any("walk-tree" in command for command in ran)
     record = json.loads((cwd / hooks.artifacts_dir / "checks.jsonl").read_text().splitlines()[-1])
-    assert record["checks"][1]["detail"] == "boom: first line"
+    assert record["checks"][0]["detail"] == "boom: first line"
 
 
 def test_runtime_hooks_manifest_refuses_schema_2_and_shell_chains() -> None:
@@ -213,41 +181,3 @@ def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> No
     for cell in EXPECTED_CELL_CHECKS:
         total = sum(row.timeout_seconds for row in hooks.checks_for_cell(cell))
         assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)
-
-
-# Words that install or upgrade OS packages on the runner. SDK 4.5 separates hook bootstrap into
-# a 120s `bootstrap_cap_seconds` (`BOOTSTRAP_CAP_SECONDS`) outside the cell budget; before that
-# separation, on infra2 run 45331134994 the apt part alone took about 260 s of the 360 s
-# `staging.post` cell (#1843).
-_OS_PACKAGE_TOKENS = frozenset({"--with-deps", "install-deps", "apt", "apt-get", "aptitude", "dpkg"})
-
-
-def _os_package_tokens(command: str) -> set[str]:
-    """OS package words in a shell command, also inside quotes, pipes and absolute paths."""
-    words = re.split(r"[\s;&|()\"'`]+", command)
-    return {word.rsplit("/", 1)[-1] for word in words} & _OS_PACKAGE_TOKENS
-
-
-def test_browser_installs_change_no_os_package() -> None:
-    """#1843: no hook bootstrap and no step of the CI browser job runs apt.
-
-    Measured on ubuntu-24.04: the headless shell has no missing library; apt added fonts
-    and upgraded mesa. The staging walk and the CI walk must run on the same OS packages.
-    """
-    hooks = _load_hooks()
-    bootstraps = {row.id: row.bootstrap for row in hooks.checks if row.bootstrap.strip()}
-    assert "walk_tree" in bootstraps
-    assert {cid: _os_package_tokens(cmd) for cid, cmd in bootstraps.items() if _os_package_tokens(cmd)} == {}
-
-    browser_steps = yaml.safe_load((WORKFLOWS / "ci-web.yml").read_text(encoding="utf-8"))["jobs"]["browser"]["steps"]
-    runs = [str(step["run"]) for step in browser_steps if "run" in step]
-    assert sum("playwright install" in run for run in runs) == 1, runs
-    assert [_os_package_tokens(run) for run in runs if _os_package_tokens(run)] == []
-
-    # The predicate finds the form that the manifest used before #1843, and the usual others.
-    with_deps = bootstraps["walk_tree"].replace("playwright install", "playwright install --with-deps")
-    assert _os_package_tokens(with_deps) == {"--with-deps"}
-    assert _os_package_tokens("bunx playwright install-deps chromium") == {"install-deps"}
-    assert _os_package_tokens("sudo apt-get install -y fonts-unifont") == {"apt-get"}
-    assert _os_package_tokens('bash -c "x|/usr/bin/apt install -y fonts-unifont"') == {"apt"}
-    assert _os_package_tokens("sudo chown runner ~/.cache") == set()

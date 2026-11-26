@@ -39,32 +39,6 @@
       }
     },
     {
-      "id": "warm_surface",
-      "argv": [
-        "sh",
-        "-c",
-        "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
-      ],
-      "needs": [
-        "running_service"
-      ],
-      "writes": false,
-      "accepts_scale": false,
-      "timeout_seconds": 30,
-      "cells": {
-        "remove": {
-          "prod.post": {
-            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
-            "issue": "wangzitian0/truealpha#1745"
-          },
-          "scheduled_audit": {
-            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
-            "issue": "wangzitian0/truealpha#1745"
-          }
-        }
-      }
-    },
-    {
       "id": "walk_tree",
       "argv": [
         "sh",

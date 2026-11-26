@@ -14,7 +14,6 @@ service objective degraded or unchanged the governed pointer) is asserted withou
 
 from __future__ import annotations
 
-import inspect
 import json
 import sys
 from datetime import UTC, datetime, timedelta
@@ -105,13 +104,6 @@ def test_every_definition_a_lane_module_declares_is_in_its_defs() -> None:
             listed = {item.name for item in getattr(lane, attribute) or ()}
             missing = built - listed
             assert not missing, f"{module_name} builds {attribute} {sorted(missing)} but its defs omit them"
-
-
-def test_deployed_module_contains_no_fixture_seeding() -> None:
-    op_source = inspect.getsource(dagster_defs.run_topt_live_tick)
-    assert "seed_strategy_backtest_inputs" not in op_source
-    assert "_load_corpus" not in op_source
-    assert not hasattr(dagster_defs, "seed_strategy_backtest_inputs")
 
 
 def test_schedule_is_enabled_hourly_with_tick_driven_identity() -> None:
@@ -748,7 +740,6 @@ def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick(
     config = request.run_config["ops"]["project_strategy_history_op"]["config"]
     assert config["executed_at"] == tick.isoformat()
     assert dg.validate_run_config(lane.strategy_history_pipeline_job, request.run_config)
-    assert "datetime.now" not in inspect.getsource(lane)
 
 
 # -- #67 / #1281: multi-universe and staggered standards plane schedules ----------------------

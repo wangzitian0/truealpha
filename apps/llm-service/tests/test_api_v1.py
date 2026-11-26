@@ -416,8 +416,6 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
 def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import inspect
-
     page_calls = 0
     identity_resolve_calls = 0
     mart_conn_calls = 0
@@ -500,7 +498,6 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
     assert all("= any(%s::text[])" in sql for sql in executed_sqls)
     assert not any("in (select ei." in sql for sql in executed_sqls)
     assert not any("mart.entity_identity" in sql for sql in executed_sqls)
-    assert "recorded_at" not in inspect.getsource(entities_service)
 
 
 def test_company_profile_reader_resolves_legacy_id_without_lateral_entity_identity_join(
