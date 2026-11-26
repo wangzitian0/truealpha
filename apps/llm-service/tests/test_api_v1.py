@@ -793,3 +793,39 @@ def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
     )
     assert bounds[0]["wilson_95_upper_bound"] == "0.045818"
     assert bounds[1]["wilson_95_upper_bound"] is None
+
+
+def test_load_wide_panel_maps_canonical_revenue_and_price_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_service.services import panel_service
+
+    class _FakeCur:
+        def execute(self, sql: str, params: Any = None) -> None:
+            assert "revenue" in params[0] and "price" in params[0]
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "issuer_id": "issuer:cik:0000320193",
+                    "node_key": "revenue",
+                    "period": "2025-09-27",
+                    "value": "416161000000",
+                    "confidence": "0.95",
+                    "availability_status": "available",
+                },
+                {
+                    "issuer_id": "issuer:cik:0000320193",
+                    "node_key": "price",
+                    "period": "2026-11-25",
+                    "value": "230.5",
+                    "confidence": "0.91",
+                    "availability_status": "available",
+                },
+            ]
+
+    monkeypatch.setattr(panel_service, "with_mart_readonly", lambda fn, **_k: fn(_FakeCur()))
+    panel = panel_service._load_wide_panel(panel_service.WIDE_PANEL_INPUT_KEYS)
+    row = panel["issuer:cik:0000320193"]
+    assert row["revenue_total"].value == "416161000000"
+    assert row["revenue_total"].node_key == "revenue_total"
+    assert row["last_close"].value == "230.5"
+    assert row["last_close"].node_key == "last_close"

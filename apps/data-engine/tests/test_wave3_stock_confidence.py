@@ -324,3 +324,126 @@ def test_panel_leaves_and_market_cap_materialize_without_mutating_gppe_sha(monke
     assert by_key["revenue"][0] == Decimal("900")
     assert by_key["net_income"][0] == Decimal("250")
     assert by_key["market_cap"] == (Decimal("2000"), Decimal("0.75"))
+
+
+def test_persist_issuer_profiles_populates_source_fetch_id() -> None:
+    from data_engine.datahub.capture_core import issuer_registry
+    from factors.snapshot_inputs import OperatingBranch
+
+    iid = "11111111-1111-1111-1111-111111111111"
+    executed: list[tuple[str, Any]] = []
+
+    class _Cur:
+        def __init__(self, rows: list[Any]) -> None:
+            self._rows = rows
+
+        def fetchone(self) -> Any:
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self) -> list[Any]:
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql: str, params: Any = None) -> _Cur:
+            executed.append((sql, params))
+            if "to_regclass" in sql:
+                return _Cur([("staging.issuer_profiles",)])
+            if "from raw.fetches" in sql:
+                return _Cur([("0000320193", 98765)])
+            return _Cur([])
+
+    written = issuer_registry.persist_issuer_profiles(
+        _Conn(),
+        classifications={
+            320193: issuer_registry.IssuerClassification(
+                operating_branch=OperatingBranch.NON_FINANCIAL,
+                sic="3571",
+                sic_description="Electronic Computers",
+                fiscal_year_end="0930",
+                primary_exchange="Nasdaq",
+                entity_type="operating",
+            )
+        },
+        issuer_ids_by_cik={320193: [iid]},
+        knowable_at=datetime(2026, 11, 26, tzinfo=UTC),
+    )
+    assert written == 1
+    inserts = [(sql, params) for sql, params in executed if "insert into staging.issuer_profiles" in sql]
+    assert len(inserts) == 1
+    assert "source_fetch_id" in inserts[0][0]
+    assert inserts[0][1][9] == 98765
+
+
+def test_known_answer_outcomes_evaluates_operating_branch_and_negative_themes() -> None:
+    from data_engine.datahub.oracle_outcomes import known_answer_outcomes
+
+    hban_obs = "normalized-observation:" + ("a" * 64)
+    sbux_obs = "normalized-observation:" + ("b" * 64)
+    part_id = "segment-partition:" + ("c" * 64)
+
+    class _Cur:
+        def __init__(self, rows: list[Any]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[Any]:
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql: str, _params: Any = None) -> _Cur:
+            if "mart.metric_node_values" in sql:
+                return _Cur([])
+            if "mart.issuer_theme_purity" in sql:
+                return _Cur(
+                    [
+                        (
+                            "issuer:cik:0000829224",
+                            829224,
+                            "semiconductors",
+                            Decimal("0"),
+                            part_id,
+                            date(2025, 9, 28),
+                            datetime(2026, 6, 30, tzinfo=UTC),
+                        ),
+                        (
+                            "issuer:cik:0000829224",
+                            829224,
+                            "cloud-software",
+                            Decimal("0.25"),
+                            part_id,
+                            date(2025, 9, 28),
+                            datetime(2026, 6, 30, tzinfo=UTC),
+                        ),
+                    ]
+                )
+            if "o.semantic_type = 'financial-fact'" in sql:
+                return _Cur(
+                    [
+                        (
+                            "issuer:cik:0000049196",
+                            hban_obs,
+                            datetime(2026, 2, 20, tzinfo=UTC),
+                            {"issuer_id": "issuer:cik:0000049196", "operating_branch": "financial"},
+                        ),
+                        (
+                            "issuer:cik:0000829224",
+                            sbux_obs,
+                            datetime(2026, 2, 20, tzinfo=UTC),
+                            {"issuer_id": "issuer:cik:0000829224", "operating_branch": "non_financial"},
+                        ),
+                    ]
+                )
+            if "p.normalized_payload ->> 'ticker'" in sql:
+                return _Cur([("HBAN", "issuer:cik:0000049196"), ("SBUX", "issuer:cik:0000829224")])
+            return _Cur([])
+
+    outcomes = known_answer_outcomes(
+        _Conn(),  # type: ignore[arg-type]
+        "capture-run:" + ("1" * 64),
+        datetime(2026, 6, 30, tzinfo=UTC),
+        [],
+    )
+    by_field = {(o.subject_id, o.field): o for o in outcomes}
+    hban_branch = by_field[("issuer:cik:0000049196", "operating_branch")]
+    assert hban_branch.result == "agree"
+    assert by_field[("issuer:cik:0000829224", "negative_theme:semiconductors")].result == "agree"
+    assert by_field[("issuer:cik:0000829224", "negative_theme:cloud-software")].result == "disagree"

@@ -186,6 +186,32 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
     return RegistryReading(classifications=classifications, unavailable=unavailable)
 
 
+def _fetch_ids_by_cik(connection: Any, ciks: Sequence[int]) -> dict[int, int]:
+    """Return latest `raw.fetches.id` per CIK for SEC submissions payloads."""
+    if not ciks:
+        return {}
+    patterns = [f"submissions:issuer:cik:{cik:010d}:%" for cik in sorted(set(ciks))]
+    cursor = connection.execute(
+        """
+        select split_part(source_record_id, ':', 4) as cik_text, id
+        from raw.fetches
+        where source = 'sec'
+          and source_record_id like any(%s::text[])
+        order by fetched_at desc, id desc
+        """,
+        (patterns,),
+    )
+    rows = cursor.fetchall() if cursor is not None else ()
+    out: dict[int, int] = {}
+    for row in rows or ():
+        if not row or len(row) < 2:
+            continue
+        cik_text, fetch_id = str(row[0] or "").strip(), row[1]
+        if cik_text.isdigit() and fetch_id is not None:
+            out.setdefault(int(cik_text), int(fetch_id))
+    return out
+
+
 def persist_issuer_profiles(
     connection: Any,
     *,
@@ -219,17 +245,19 @@ def persist_issuer_profiles(
         for eid, cik_text in ei_rows or ():
             if cik_text and str(cik_text).isdigit():
                 resolved_uuids.setdefault(int(str(cik_text)), set()).add(str(eid))
+    fetch_ids = _fetch_ids_by_cik(connection, list(resolved_uuids))
     written = 0
     for cik in sorted(resolved_uuids):
         cls = classifications[cik]
+        fetch_id = fetch_ids.get(cik)
         for iid in sorted(resolved_uuids[cik]):
             connection.execute(
                 """
                 insert into staging.issuer_profiles (
                     issuer_id, cik, sic, sic_description, category,
                     state_of_incorporation, fiscal_year_end, primary_exchange,
-                    entity_type, knowable_at, recorded_at
-                ) values (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
+                    entity_type, source_fetch_id, knowable_at, recorded_at
+                ) values (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
                 on conflict (issuer_id) do update set
                     cik = excluded.cik,
                     sic = coalesce(excluded.sic, staging.issuer_profiles.sic),
@@ -239,6 +267,7 @@ def persist_issuer_profiles(
                     fiscal_year_end = coalesce(excluded.fiscal_year_end, staging.issuer_profiles.fiscal_year_end),
                     primary_exchange = coalesce(excluded.primary_exchange, staging.issuer_profiles.primary_exchange),
                     entity_type = coalesce(excluded.entity_type, staging.issuer_profiles.entity_type),
+                    source_fetch_id = coalesce(excluded.source_fetch_id, staging.issuer_profiles.source_fetch_id),
                     knowable_at = least(staging.issuer_profiles.knowable_at, excluded.knowable_at),
                     recorded_at = clock_timestamp()
                 """,
@@ -252,6 +281,7 @@ def persist_issuer_profiles(
                     cls.fiscal_year_end,
                     cls.primary_exchange,
                     cls.entity_type,
+                    fetch_id,
                     effective_ts,
                 ),
             )
