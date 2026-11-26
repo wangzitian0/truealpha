@@ -25,7 +25,7 @@ from llm_service.services._db import with_ops_reader
 logger = logging.getLogger(__name__)
 
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
-ROUTED_PREFIX = "/api"
+ROUTED_PREFIX = settings.routed_prefix.rstrip("/")
 TRUSTED_PROXIES = ("127.0.0.1", "::1")
 NIGHTLY_VERDICTS_SQL = (
     "select distinct on (check_name) check_name, ran_at, ok, summary "
@@ -89,7 +89,8 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(TRUSTED_PROXIES))
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
 def mcp_slash(request: Request) -> RedirectResponse:
     del request
-    return RedirectResponse(f"{ROUTED_PREFIX}/mcp/", status_code=307)
+    prefix = settings.routed_prefix.rstrip("/")
+    return RedirectResponse(f"{prefix}/mcp/", status_code=307)
 
 
 app.mount(

@@ -1411,3 +1411,30 @@ def test_standard_history_schedule_filters_to_scheduled_universes(monkeypatch) -
     universes = [r.run_config["ops"]["run_standard_history"]["config"]["universe"] for r in reqs]
     assert sorted(universes) == ["topt", "universe-list:qqq"]
     assert "universe-list:sp500" not in universes
+
+
+def test_preview_environment_sets_every_dagster_schedule_stopped() -> None:
+    """Q09: Every Dagster schedule resolves from environment_contract.v1.json and stays STOPPED in preview."""
+    preview_defs = dagster_defs.build_definitions("preview")
+    schedules = list(preview_defs.schedules or ())
+    assert schedules
+    running = [sched.name for sched in schedules if sched.default_status != dg.DefaultScheduleStatus.STOPPED]
+    assert running == [], f"preview environment (live_vendor_calls=false) must keep all schedules STOPPED: {running}"
+
+    staging_defs = dagster_defs.build_definitions("staging")
+    staging_status = {sched.name: sched.default_status for sched in (staging_defs.schedules or ())}
+    for live_name in (
+        "output_invariants_schedule",
+        "datahub_confidence_report_schedule",
+        "model_key_health_schedule",
+        "job_run_health_schedule",
+        "topt_baseline_schedule",
+        "standard_backfill_schedule",
+        "standard_history_schedule",
+        "head_reports_schedule",
+        "nightly_backtest_schedule",
+        "strategy_history_schedule",
+        "macro_data_refresh_schedule",
+        "market_data_refresh_schedule",
+    ):
+        assert staging_status[live_name] == dg.DefaultScheduleStatus.RUNNING, live_name

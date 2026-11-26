@@ -1049,6 +1049,7 @@ def test_vision_audit_evaluates_all_30_criteria_and_separates_live_health_from_p
             {"universe_id": "universe:sp500-us-2026-06-30", "freshness": "fresh", "availability": "available"},
         ],
     )
+    monkeypatch.setenv("TRUEALPHA_DOMAIN", "example.test")
     monkeypatch.setattr(vision_audit, "read_report", lambda *_a, **_k: health)
     report = vision_audit.audit_vision(env="staging", now=now)
     assert report.criteria_summary["total"] == 30
@@ -1066,8 +1067,20 @@ def test_vision_audit_staging_health_url_and_user_agent(monkeypatch: pytest.Monk
 
     from truealpha_tools import vision_audit
 
-    assert vision_audit._health_url_for("staging") == "https://truealpha-staging.truealpha.club/api/health"
-    assert vision_audit._health_url_for("prod") == "https://truealpha.club/api/health"
+    monkeypatch.delenv("TRUEALPHA_BASE_URL", raising=False)
+    monkeypatch.delenv("TRUEALPHA_DOMAIN", raising=False)
+    with pytest.raises(ValueError, match="TRUEALPHA_BASE_URL"):
+        vision_audit._health_url_for("staging")
+
+    monkeypatch.setenv("TRUEALPHA_DOMAIN", "example.test")
+    assert vision_audit._health_url_for("staging") == "https://truealpha-staging.example.test/api/health"
+    assert vision_audit._health_url_for("prod") == "https://example.test/api/health"
+    assert (
+        vision_audit._health_url_for("staging", base_url="http://localhost:8000/") == "http://localhost:8000/api/health"
+    )
+
+    monkeypatch.setenv("TRUEALPHA_BASE_URL", "https://staging.custom.test/")
+    assert vision_audit._health_url_for("staging") == "https://staging.custom.test/api/health"
 
     captured_headers: list[dict[str, str]] = []
 
@@ -1089,9 +1102,9 @@ def test_vision_audit_staging_health_url_and_user_agent(monkeypatch: pytest.Monk
         return _Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-    status, body = vision_audit._http_get("https://truealpha-staging.truealpha.club/api/health")
+    status, body = vision_audit._http_get("https://truealpha-staging.example.test/api/health")
     assert status == 200 and "ok" in body
     assert captured_headers[0]["user-agent"] == "truealpha-ops-audit/1.0"
-    nv_status, nv_body = _module._default_http_get("https://truealpha-staging.truealpha.club/api/health")
+    nv_status, nv_body = _module._default_http_get("https://truealpha-staging.example.test/api/health")
     assert nv_status == 200 and "ok" in nv_body
     assert captured_headers[1]["user-agent"] == "truealpha-ops-audit/1.0"

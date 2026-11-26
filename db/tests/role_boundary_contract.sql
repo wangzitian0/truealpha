@@ -103,12 +103,36 @@ begin
         'raw.fetches',
         'staging.entities',
         'mart.current_pointer',
-        'mart.current_pointer_head'
+        'mart.current_pointer_head',
+        'mart.nightly_verdicts',
+        'mart.output_invariant_results',
+        'ops.nightly_verdicts',
+        'ops.output_invariant_results'
     ] loop
         if has_table_privilege('mart_readonly', restricted_tbl, 'select') then
             raise exception 'mart_readonly must not select from %', restricted_tbl;
         end if;
     end loop;
+
+    set local role app_ops_reader;
+    select count(*) into row_count from ops.nightly_verdicts;
+    select count(*) into row_count from ops.output_invariant_results;
+    select count(*) into row_count from ops.pipeline_trigger_requests;
+    select count(*) into row_count from ops.head_rollback_requests;
+    reset role;
+
+    if not exists (
+        select 1 from pg_roles
+        where rolname = 'data_engine_runtime' and not rolsuper and not rolcanlogin
+    ) then
+        raise exception 'data_engine_runtime must exist as non-superuser nologin role';
+    end if;
+    if has_schema_privilege('data_engine_runtime', 'app', 'USAGE') then
+        raise exception 'data_engine_runtime must not have USAGE on private schema app';
+    end if;
+    if has_table_privilege('data_engine_runtime', 'app.principal_credentials', 'SELECT') then
+        raise exception 'data_engine_runtime must not select from app.principal_credentials';
+    end if;
 
     if exists (
         select 1 from pg_attribute
