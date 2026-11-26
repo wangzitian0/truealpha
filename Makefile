@@ -75,7 +75,7 @@ if [ -n "$$($(COMPOSE) ps -q postgres 2>/dev/null)" ]; then \
 	export TRUEALPHA_PSQL="$(COMPOSE) exec -T postgres psql"; \
 	export DATABASE_URL="postgresql:///$${POSTGRES_DB:-truealpha}?user=$${POSTGRES_USER:-postgres}"; \
 else \
-	export DATABASE_URL="$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"; \
+	export DATABASE_URL="$${DATABASE_URL:-postgresql://postgres@127.0.0.1:55432/truealpha}"; \
 fi
 endef
 
@@ -104,9 +104,9 @@ db-reset:
 # Is this database still the chain? Read-only against the target; it builds a reference
 # from db/migrations + db/roles.sql on the same server and diffs the two catalogs, so
 # there is no snapshot to keep fresh. Needs host psql and a host-reachable DATABASE_URL
-# (the compose Postgres publishes 127.0.0.1:5432 by default).
+# (the compose Postgres publishes 127.0.0.1:55432 by default).
 db-check:
-	uv run python -m truealpha_tools.schema_drift --database-url "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"
+	uv run python -m truealpha_tools.schema_drift --database-url "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:55432/truealpha}"
 
 web:
 	cd apps/app-web && bun run dev

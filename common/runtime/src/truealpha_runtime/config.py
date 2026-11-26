@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _S3_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 
-DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
+DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:55432/truealpha"
 POSTGRES_PROVIDED_BY = "truealpha/postgres:POSTGRES_PASSWORD"
 _DEPLOYED_TIERS = frozenset(
     {
