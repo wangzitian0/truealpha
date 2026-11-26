@@ -38,7 +38,7 @@ def live_vendor_calls_enabled(environment: str | None = None) -> bool:
             normalized = ""
     if normalized in contract.environments:
         return bool(contract.environments[normalized].live_vendor_calls)
-    if (raw or "").strip().lower() in {"dev", "ci", "local_dev"}:
+    if (raw or "").strip().lower() in {"dev", "ci", "test", "local", "local_dev", "local_test", "github_ci"}:
         return bool(contract.environments[UNRECOGNISED_ENVIRONMENT_RULE].live_vendor_calls)
     return False
 
