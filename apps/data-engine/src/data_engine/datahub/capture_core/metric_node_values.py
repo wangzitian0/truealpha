@@ -294,6 +294,121 @@ def _insert_metric_node_value(
     return 1 if row is not None else 0
 
 
+_LEAF_NODE_KEYS: tuple[str, ...] = (
+    "revenue",
+    "gross_profit",
+    "total_assets",
+    "employees_total",
+    "net_income",
+    "price",
+    "shares_outstanding",
+    "pre_provision_profit",
+    "stockholders_equity",
+    "preferred_stock_value",
+    "goodwill",
+    "intangible_assets_net_excluding_goodwill",
+    "bank_net_revenue",
+)
+
+
+def _materialize_panel_leaves(
+    connection: Connection[Any],
+    *,
+    metrics: Mapping[str, PanelMetricSpec],
+    factor_input: CoreSnapshotInput,
+    issuer_class: IssuerClass,
+    gppe_definition: GppeV0Definition,
+    financial_payload: Mapping[str, Any],
+    periods: tuple[date | None, date | None, date | None],
+    freshness: MetricFreshness,
+    base_confidence: Decimal,
+    source_evidence: InputEvidenceStatus,
+    validation_status: FactorValidationStatus,
+    not_applicable: bool = False,
+) -> int:
+    """Materialize wide-panel leaf nodes and derived market_cap alongside composite variant trees."""
+    leaf_tree_id = tree_id_for("panel_leaves", "v1")
+    leaf_tree_sha = canonical_sha256({"tree": "panel_leaves", "version": "v1"})
+    inserted = 0
+    resolved_leaves: dict[str, tuple[Decimal | None, Decimal]] = {}
+    for key in _LEAF_NODE_KEYS:
+        spec = metrics.get(key)
+        if spec is None or issuer_class not in spec.applicability:
+            continue
+        val, reason, conf = _resolve_input_value(
+            spec,
+            factor_input=factor_input,
+            gppe_definition=gppe_definition,
+            financial_payload=financial_payload,
+        )
+        effective_conf = conf if conf is not None else base_confidence
+        resolved_leaves[key] = (val, effective_conf)
+        period_str, period_tag = _node_period(
+            spec, factor_input=factor_input, periods=periods, financial_payload=financial_payload
+        )
+        reasons = [reason] if reason is not None else []
+        avail = "available" if val is not None and not reasons else "unavailable"
+        inserted += _insert_metric_node_value(
+            connection,
+            run_id=factor_input.run_id,
+            issuer_id=factor_input.issuer_id,
+            node_id=spec.node_id,
+            node_key=spec.key,
+            period=period_str,
+            period_tag=period_tag,
+            value=val if avail == "available" else None,
+            unit=spec.unit.value if spec.unit is not None else None,
+            availability=avail,
+            freshness=freshness,
+            confidence=effective_conf if avail == "available" else Decimal("0"),
+            reason_codes=reasons,
+            source_evidence=source_evidence,
+            validation_status=validation_status,
+            tree_id=leaf_tree_id,
+            tree_version="v1",
+            tree_sha256=leaf_tree_sha,
+            observation_ids=factor_input.observation_ids,
+            not_applicable=not_applicable,
+        )
+    mkt_spec = metrics.get("market_cap")
+    if mkt_spec is not None and issuer_class in mkt_spec.applicability:
+        price_val, price_conf = resolved_leaves.get("price", (None, Decimal("0")))
+        shares_val, shares_conf = resolved_leaves.get("shares_outstanding", (None, Decimal("0")))
+        if price_val is not None and shares_val is not None and price_val > 0 and shares_val > 0:
+            mkt_val: Decimal | None = price_val * shares_val
+            mkt_conf = min(price_conf, shares_conf)
+            mkt_avail = "available"
+            mkt_reasons: list[str] = []
+        else:
+            mkt_val, mkt_conf, mkt_avail, mkt_reasons = None, Decimal("0"), "unavailable", ["no_market_cap"]
+        period_str, period_tag = _node_period(
+            mkt_spec, factor_input=factor_input, periods=periods, financial_payload=financial_payload
+        )
+        inserted += _insert_metric_node_value(
+            connection,
+            run_id=factor_input.run_id,
+            issuer_id=factor_input.issuer_id,
+            node_id=mkt_spec.node_id,
+            node_key=mkt_spec.key,
+            period=period_str,
+            period_tag=period_tag,
+            value=mkt_val,
+            unit=mkt_spec.unit.value if mkt_spec.unit is not None else None,
+            availability=mkt_avail,
+            freshness=freshness,
+            confidence=mkt_conf,
+            reason_codes=mkt_reasons,
+            source_evidence=source_evidence,
+            validation_status=validation_status,
+            tree_id=leaf_tree_id,
+            tree_version="v1",
+            tree_sha256=leaf_tree_sha,
+            observation_ids=factor_input.observation_ids,
+            not_applicable=not_applicable,
+        )
+    return inserted
+
+
 def materialize_metric_node_values(
     connection: Connection[Any],
     *,
@@ -338,6 +453,21 @@ def materialize_metric_node_values(
         periods = periods_by_listing.get(factor_input.listing_id, (None, None, None))
         source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.DEGRADED)
 
+        if not factor_input.primary_listing_undeclared:
+            inserted_count += _materialize_panel_leaves(
+                connection,
+                metrics=metrics,
+                factor_input=factor_input,
+                issuer_class=issuer_class,
+                gppe_definition=gppe_definition,
+                financial_payload=financial_payload,
+                periods=periods,
+                freshness=freshness,
+                base_confidence=base_confidence,
+                source_evidence=source_evidence,
+                validation_status=validation_status,
+                not_applicable=factor_input.issuer_id in resolved_not_applicable,
+            )
         for variant in variants:
             if issuer_class not in variant.applicability:
                 continue

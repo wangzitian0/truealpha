@@ -25,8 +25,8 @@ from factors.shared.extraction import (
     select_first_balancing_set,
 )
 
-from data_engine.contracts.standards import MetricStandard, confidence_for
-from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN, execute_many
+from data_engine.contracts.standards import MetricStandard
+from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN, calibrated_confidence_for, execute_many
 from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.standards.filing_extraction import (
@@ -628,7 +628,12 @@ def _land_partition(
         knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
         evidence_ref=evidence_ref,
         extractor=extractor,
-        confidence=confidence_for(standard.confidence_policy_id, extractor),
+        confidence=calibrated_confidence_for(
+            standard.confidence_policy_id,
+            extractor,
+            case_id=f"segment:{partition_id}",
+            evidence_id=evidence_ref,
+        ),
     )
     return _doc_outcome(
         record_cik, "resolved", document, extractor=extractor, detail=f"{partition_id} landed {summary}{note}"

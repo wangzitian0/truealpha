@@ -112,6 +112,9 @@ class FinancialFactsBundle:
     tangible_equity_period_end: date | None = None
     bank_net_revenue: Decimal | None = None
     currency: str | None = None
+    companyfacts_headcount: Decimal | None = None
+    companyfacts_headcount_vintage: Mapping[str, Any] | None = None
+    companyfacts_headcount_knowable_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -397,16 +400,72 @@ def _field_series_memo(
     return series
 
 
+def _combined_cogs_and_services(facts: dict[str, Any], cutoff: date) -> dict[date, _Datum]:
+    cogs = annual_values_by_period_end(facts, "us-gaap", "CostOfGoodsSold", "USD", cutoff)
+    cos = annual_values_by_period_end(facts, "us-gaap", "CostOfServices", "USD", cutoff)
+    combined_tags = set(annual_values_by_period_end(facts, "us-gaap", "CostOfRevenue", "USD", cutoff)) | set(
+        annual_values_by_period_end(facts, "us-gaap", "CostOfGoodsAndServicesSold", "USD", cutoff)
+    )
+    combined: dict[date, _Datum] = {}
+    for end in (set(cogs) & set(cos)) - combined_tags:
+        combined[end] = _sum_at(end, [cogs[end], cos[end]])
+    return combined
+
+
+def _companyfacts_headcount(facts: dict[str, Any], cutoff: date) -> tuple[Decimal, dict[str, Any], datetime] | None:
+    units = facts.get("facts", {}).get("dei", {}).get("EntityNumberOfEmployees", {}).get("units", {})
+    if not isinstance(units, Mapping):
+        return None
+    best: tuple[date, date, str, str, Decimal] | None = None
+    for unit_key in ("pure", "employees", "persons", "person"):
+        entries = units.get(unit_key)
+        if not isinstance(entries, Sequence):
+            continue
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            raw_val, raw_end, raw_filed = entry.get("val"), entry.get("end"), entry.get("filed")
+            acc = str(entry.get("accn") or "").strip()
+            form = str(entry.get("form") or "").strip()
+            if raw_val is None or not raw_end or not raw_filed or not acc:
+                continue
+            try:
+                end_dt = date.fromisoformat(str(raw_end)[:10])
+                filed_dt = date.fromisoformat(str(raw_filed)[:10])
+                val_dec = Decimal(str(raw_val))
+            except (TypeError, ValueError):
+                continue
+            if filed_dt > cutoff or val_dec <= 0 or val_dec != val_dec.to_integral_value():
+                continue
+            cand = (end_dt, filed_dt, acc, form, val_dec)
+            if best is None or (cand[0], cand[1]) > (best[0], best[1]):
+                best = cand
+    if best is None:
+        return None
+    end_dt, filed_dt, acc, form, val_dec = best
+    knowable = knowable_instant(AsOfAxis.ACCESSION, filed_dt)
+    vintage = {
+        "accession": acc,
+        "form": form or "10-K",
+        "filed": filed_dt.isoformat(),
+        "period_end": end_dt.isoformat(),
+        "raw": f"companyfacts:dei:EntityNumberOfEmployees={int(val_dec)}",
+    }
+    return val_dec, vintage, knowable
+
+
 def gross_profit(
     facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> _Datum | None:
     """Reported `GrossProfit` or `revenue - cost_of_revenue`, whichever covers the later period."""
     direct = _latest(resolve_field(facts, ruleset, "gross_profit", cutoff))
+    revenue = resolve_field(facts, ruleset, "revenue", cutoff)
     derived = _difference_at_shared_period(
-        resolve_field(facts, ruleset, "revenue", cutoff),
+        revenue,
         resolve_field(facts, ruleset, "cost_of_revenue", cutoff),
     )
-    return _best_candidate(direct, derived)
+    hybrid = _difference_at_shared_period(revenue, _combined_cogs_and_services(facts, cutoff))
+    return _best_candidate(direct, hybrid, derived)
 
 
 def _declared_concepts(ruleset: ConceptMappingRuleset, field_name: str) -> tuple[ConceptRef, ...]:
@@ -654,6 +713,7 @@ def build_bundle(
     period_start = (profit.period_start if profit is not None else None) or (
         revenue.period_start if revenue is not None else None
     )
+    cf_headcount = _companyfacts_headcount(facts, cutoff)
     return FinancialFactsBundle(
         gross_profit=_v(gp_datum),
         total_assets=_v(assets),
@@ -688,6 +748,9 @@ def build_bundle(
         tangible_equity_period_end=tangible.period_end,
         bank_net_revenue=_v(bank_net_rev),
         currency=_ruleset_currency(ruleset),
+        companyfacts_headcount=None if cf_headcount is None else cf_headcount[0],
+        companyfacts_headcount_vintage=None if cf_headcount is None else cf_headcount[1],
+        companyfacts_headcount_knowable_at=None if cf_headcount is None else cf_headcount[2],
     )
 
 
@@ -938,6 +1001,15 @@ class SecFinancialFactAdapter:
 
         knowable_at = bundle.knowable_at or knowable_instant(AsOfAxis.ACCESSION, target.cutoff)
         headcount, headcount_evidence, knowable_at = self._resolve_headcount_fact(target, knowable_at)
+        if (
+            headcount is None
+            and bundle.companyfacts_headcount is not None
+            and bundle.companyfacts_headcount_knowable_at is not None
+            and bundle.companyfacts_headcount_knowable_at.date() <= target.cutoff
+        ):
+            headcount = bundle.companyfacts_headcount
+            headcount_evidence = dict(bundle.companyfacts_headcount_vintage or {})
+            knowable_at = max(knowable_at, bundle.companyfacts_headcount_knowable_at)
         payload: dict[str, Any] = {
             "issuer_id": target.issuer_id,
             "instrument_id": target.instrument_id,
@@ -1202,7 +1274,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
 
     from data_engine.datahub.capture_core.concept_mapping import resolve_ruleset
     from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor
-    from data_engine.datahub.capture_core.issuer_registry import resolve_issuer_classifications
+    from data_engine.datahub.capture_core.issuer_registry import persist_issuer_profiles, resolve_issuer_classifications
     from data_engine.datahub.capture_core.moomoo_origin import moomoo_financials_origin
     from data_engine.datahub.standards.listing_unit_ratio import CoverRatioReader
     from data_engine.datahub.standards.planner import resolve_issuer_cik
@@ -1230,6 +1302,17 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
 
     registry = resolve_issuer_classifications(cik_by_ticker)
+    if connection is not None:
+        issuer_ids_by_cik: dict[int, list[str]] = {}
+        for iid, _, _, tkr in context.coordinates.values():
+            if tkr in cik_by_ticker:
+                issuer_ids_by_cik.setdefault(cik_by_ticker[tkr], []).append(iid)
+        persist_issuer_profiles(
+            connection,
+            classifications=registry.classifications,
+            issuer_ids_by_cik=issuer_ids_by_cik,
+            knowable_at=context.cutoff,
+        )
     classifications = registry.classifications
     listing_ids = [coordinate[2] for coordinate in context.coordinates.values()]
     issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in context.coordinates.values()}

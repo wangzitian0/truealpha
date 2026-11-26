@@ -118,3 +118,67 @@ def test_evaluate_cell_confidence_handles_definitional_and_missing_cells() -> No
     assert "reason:no_origin_value" in missing.reason_codes
     assert len(missing.policy_hash) == 64
     assert len(missing.input_hash) == 64
+
+
+def test_modules_3_and_4_use_min_consumed_confidence() -> None:
+    from datetime import UTC, datetime
+
+    from factors.base.analyst_track_record import AnalystRatingItem, analyst_track_record
+    from factors.base.supply_chain_exposure import SupplyChainPartner, supply_chain_exposure
+
+    now = datetime(2026, 5, 1, tzinfo=UTC)
+    sc = supply_chain_exposure(
+        [
+            SupplyChainPartner("p1", "Partner 1", "supplier", Decimal("0.20"), Decimal("0.90")),
+            SupplyChainPartner("p2", "Partner 2", "supplier", Decimal("0.10"), Decimal("0.35")),
+        ],
+        entity_id="issuer:a",
+        as_of=now,
+        supplies_to_edges_exist=True,
+    )
+    assert sc.result.confidence == Decimal("0.35")
+
+    ar = analyst_track_record(
+        [
+            AnalystRatingItem(analyst_id="a1", rating=5, confidence=Decimal("0.92")),
+            AnalystRatingItem(analyst_id="a2", rating=4, confidence=Decimal("0.40")),
+        ],
+        entity_id="issuer:a",
+        as_of=now,
+    )
+    assert ar.result.confidence == Decimal("0.40")
+
+
+def test_theme_purity_allocates_small_eliminations_pro_rata_and_refuses_large() -> None:
+    from datetime import UTC, datetime
+
+    from factors.base.theme_purity import ThemeSegment, theme_purity
+
+    now = datetime(2026, 5, 1, tzinfo=UTC)
+    small_elim = theme_purity(
+        [ThemeSegment("Cloud", Decimal("50"), True), ThemeSegment("Legacy", Decimal("50"), False)],
+        entity_id="issuer:a",
+        theme="AI",
+        as_of=now,
+        consolidated_revenue=Decimal("85"),
+        partition_residual=Decimal("-15"),
+        confidence=Decimal("0.75"),
+        gross_segments=True,
+    )
+    assert small_elim.result.value == Decimal("0.5")
+    assert small_elim.result.confidence == Decimal("0.75")
+    assert "elimination_allocated_pro_rata" in small_elim.result.flags
+
+    large_elim = theme_purity(
+        [ThemeSegment("Cloud", Decimal("50"), True), ThemeSegment("Legacy", Decimal("50"), False)],
+        entity_id="issuer:a",
+        theme="AI",
+        as_of=now,
+        consolidated_revenue=Decimal("70"),
+        partition_residual=Decimal("-30"),
+        confidence=Decimal("0.75"),
+        gross_segments=True,
+    )
+    assert large_elim.result.value is None
+    assert large_elim.result.confidence == Decimal("0")
+    assert "elimination_not_allocated" in large_elim.result.flags

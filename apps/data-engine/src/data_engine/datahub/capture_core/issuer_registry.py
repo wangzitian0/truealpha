@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -83,6 +84,13 @@ def operating_branch_for_sic(sic: str | None) -> OperatingBranch:
 class IssuerClassification:
     operating_branch: OperatingBranch
     statement_filings: tuple[StatementFiling, ...] = ()
+    sic: str | None = None
+    sic_description: str | None = None
+    category: str | None = None
+    state_of_incorporation: str | None = None
+    fiscal_year_end: str | None = None
+    primary_exchange: str | None = None
+    entity_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +134,22 @@ def _read_submissions(cik: int, http: httpx.Client, *, attempts: int) -> _Read:
         return _Read(None, f"{type(error).__name__}: {error}"[:300], outage)
 
 
+def _clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _primary_exchange(submissions: Mapping[str, Any]) -> str | None:
+    raw = submissions.get("exchanges")
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        for item in raw:
+            if (clean := _clean_text(item)) is not None:
+                return clean
+    return _clean_text(submissions.get("exchange"))
+
+
 def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
     classifications: dict[int, IssuerClassification] = {}
     unavailable: dict[int, str] = {}
@@ -147,11 +171,92 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
                     )
                 continue
             failed_in_a_row = 0
+            sub = read.submissions
             classifications[cik] = IssuerClassification(
-                operating_branch=operating_branch_for_sic(read.submissions.get("sic")),
-                statement_filings=statement_filings(read.submissions),
+                operating_branch=operating_branch_for_sic(sub.get("sic")),
+                statement_filings=statement_filings(sub),
+                sic=_clean_text(sub.get("sic")),
+                sic_description=_clean_text(sub.get("sicDescription")),
+                category=_clean_text(sub.get("category")),
+                state_of_incorporation=_clean_text(sub.get("stateOfIncorporation")),
+                fiscal_year_end=_clean_text(sub.get("fiscalYearEnd")),
+                primary_exchange=_primary_exchange(sub),
+                entity_type=_clean_text(sub.get("entityType")),
             )
     return RegistryReading(classifications=classifications, unavailable=unavailable)
+
+
+def persist_issuer_profiles(
+    connection: Any,
+    *,
+    classifications: Mapping[int, IssuerClassification],
+    issuer_ids_by_cik: Mapping[int, Sequence[str]],
+    knowable_at: datetime | None = None,
+) -> int:
+    """Upsert SEC submissions profile metadata into staging.issuer_profiles when present."""
+    if connection is None or not classifications:
+        return 0
+    reg_row = connection.execute("select to_regclass('staging.issuer_profiles')").fetchone()
+    if reg_row is None or reg_row[0] is None:
+        return 0
+    effective_ts = knowable_at or datetime.now(UTC)
+    resolved_uuids: dict[int, set[str]] = {}
+    legacy_ciks: list[int] = []
+    for cik, raw_ids in issuer_ids_by_cik.items():
+        if cik not in classifications:
+            continue
+        for raw_id in raw_ids:
+            try:
+                resolved_uuids.setdefault(cik, set()).add(str(uuid.UUID(str(raw_id))))
+            except (ValueError, TypeError):
+                legacy_ciks.append(cik)
+    if legacy_ciks:
+        padded = [f"{c:010d}" for c in sorted(set(legacy_ciks))]
+        ei_rows = connection.execute(
+            "select entity_id::text, cik from mart.entity_identity where kind = 'issuer' and cik = any(%s::text[])",
+            (padded,),
+        ).fetchall()
+        for eid, cik_text in ei_rows or ():
+            if cik_text and str(cik_text).isdigit():
+                resolved_uuids.setdefault(int(str(cik_text)), set()).add(str(eid))
+    written = 0
+    for cik in sorted(resolved_uuids):
+        cls = classifications[cik]
+        for iid in sorted(resolved_uuids[cik]):
+            connection.execute(
+                """
+                insert into staging.issuer_profiles (
+                    issuer_id, cik, sic, sic_description, category,
+                    state_of_incorporation, fiscal_year_end, primary_exchange,
+                    entity_type, knowable_at, recorded_at
+                ) values (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
+                on conflict (issuer_id) do update set
+                    cik = excluded.cik,
+                    sic = coalesce(excluded.sic, staging.issuer_profiles.sic),
+                    sic_description = coalesce(excluded.sic_description, staging.issuer_profiles.sic_description),
+                    category = coalesce(excluded.category, staging.issuer_profiles.category),
+                    state_of_incorporation = coalesce(excluded.state_of_incorporation, staging.issuer_profiles.state_of_incorporation),
+                    fiscal_year_end = coalesce(excluded.fiscal_year_end, staging.issuer_profiles.fiscal_year_end),
+                    primary_exchange = coalesce(excluded.primary_exchange, staging.issuer_profiles.primary_exchange),
+                    entity_type = coalesce(excluded.entity_type, staging.issuer_profiles.entity_type),
+                    knowable_at = least(staging.issuer_profiles.knowable_at, excluded.knowable_at),
+                    recorded_at = clock_timestamp()
+                """,
+                (
+                    iid,
+                    cik,
+                    cls.sic,
+                    cls.sic_description,
+                    cls.category,
+                    cls.state_of_incorporation,
+                    cls.fiscal_year_end,
+                    cls.primary_exchange,
+                    cls.entity_type,
+                    effective_ts,
+                ),
+            )
+            written += 1
+    return written
 
 
 def registry_unavailable_issuers(connection: Any, *, run_id: str) -> list[str]:

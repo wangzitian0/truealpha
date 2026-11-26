@@ -106,13 +106,18 @@ def theme_purity(
     refused = (in_theme + out_of_theme) / accounted < minimum_classified_share
     if refused:
         flags.append("below_minimum_classified_share")
-    # Gross segments with an intersegment elimination as the residual (#1851): the elimination
-    # belongs to no known segment. The share is a fact only when every segment is in the theme (1)
-    # or none is (0); otherwise the row keeps its revenue fields and serves no value.
+    # Gross segments with an intersegment elimination as the residual (#1851): when the
+    # elimination share is at most 25% of gross segment revenue, allocate pro-rata across
+    # segments and mark `elimination_allocated_pro_rata` (in_theme / accounted already preserves
+    # the pro-rata ratio); otherwise refuse the share with `elimination_not_allocated`.
     mixed = in_theme > _ZERO and (out_of_theme > _ZERO or unclassified > _ZERO)
     if gross_segments and partition_residual < _ZERO and mixed:
-        refused = True
-        flags.append("elimination_not_allocated")
+        elim_share = (-partition_residual) / accounted
+        if elim_share <= Decimal("0.25"):
+            flags.append("elimination_allocated_pro_rata")
+        else:
+            refused = True
+            flags.append("elimination_not_allocated")
 
     return ThemePurity(
         entity_id=entity_id,
