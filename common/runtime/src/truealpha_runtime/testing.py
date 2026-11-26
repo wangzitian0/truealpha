@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
-from infra2_sdk.runtime.environment import runtime_env_contract
+from infra2_sdk.config import shared_env_contract
 from psycopg import sql
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_corpus
@@ -253,8 +253,8 @@ class OtlpCollectorStub:
 def run_python_probe(
     code: str, environ: Mapping[str, str], *, timeout: float = 120
 ) -> subprocess.CompletedProcess[str]:
-    variables: Any = runtime_env_contract()["variables"]
-    declared = {item["name"] for item in variables}
+    groups: Mapping[str, list[dict[str, Any]]] = shared_env_contract()["groups"]
+    declared = {item["name"] for group in groups.values() for item in group}
     scrubbed = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_") and k not in declared}
     return subprocess.run(
         [sys.executable, "-c", code],

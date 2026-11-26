@@ -593,10 +593,15 @@ def test_the_command_line_asks_each_environment_for_the_universes_its_release_sc
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Through `main([...])`, the entry point of `tools/nightly_verdicts.py`."""
-    import infra2_sdk.deploy
+    import infra2_sdk.delivery
 
     repo = _release_repo(tmp_path)
-    monkeypatch.setattr(infra2_sdk.deploy, "default_http_get", lambda: _health_without_sp500(datetime.now(UTC)))
+    health_get = _health_without_sp500(datetime.now(UTC))
+    monkeypatch.setattr(
+        infra2_sdk.delivery,
+        "default_http_get",
+        lambda url, _timeout=15.0: (lambda s, b: (s, b.encode("utf-8")))(*health_get(url)),
+    )
 
     def run(environment: str) -> int:
         return _module.main([URL, "--environment", environment, "--repo", str(repo)])
@@ -780,12 +785,87 @@ def test_first_declared_is_unknown_whenever_a_step_cannot_be_shown(run: object) 
     assert _module.first_declared_at("model_key_health", release="v0.0.75", run=run) is None
 
 
+_CRON_GAP_WINDOW_DAYS = 1461
+_CRON_WINDOW_START = datetime(2024, 1, 1, tzinfo=UTC)
+_CRON_NAMES = {
+    "month": {
+        n: i
+        for i, n in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)
+    },
+    "dow": {n: i for i, n in enumerate(("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"))},
+}
+_CRON_RANGES = {"minute": (0, 59), "hour": (0, 23), "dom": (1, 31), "month": (1, 12), "dow": (0, 7)}
+
+
+def _cron_value(token: str, field: str) -> int:
+    low, high = _CRON_RANGES[field]
+    if token.isdigit():
+        num = int(token)
+        if not low <= num <= high:
+            raise ValueError(f"{field}: {token!r} is outside {low}-{high}")
+        return num
+    num = _CRON_NAMES.get(field, {}).get(token.upper())
+    if num is None:
+        raise ValueError(f"{field}: {token!r} is not a number")
+    return num
+
+
+def _cron_field_values(text: str, field: str) -> set[int]:
+    low, high = _CRON_RANGES[field]
+    out: set[int] = set()
+    for elem in text.split(","):
+        span, _, step_text = elem.partition("/")
+        if step_text and not step_text.isdigit():
+            raise ValueError(f"{field}: step {step_text!r} is not a number")
+        step = int(step_text) if step_text else 1
+        if step < 1:
+            raise ValueError(f"{field}: step must be at least 1")
+        if span == "*":
+            first, last = low, (6 if field == "dow" else high)
+        elif "-" in span:
+            a, _, b = span.partition("-")
+            first, last = _cron_value(a, field), _cron_value(b, field)
+        else:
+            first = _cron_value(span, field)
+            last = high if step_text else first
+        if first > last:
+            raise ValueError(f"{field}: range {span!r} runs backwards")
+        out.update(range(first, last + 1, step))
+    return out
+
+
+def _largest_gap(crons: list[str]) -> timedelta:
+    """Return the largest gap between consecutive fire times across ``crons``."""
+    if not crons:
+        raise ValueError("the workflow has no cron")
+    day_times: dict[int, set[int]] = {}
+    for expr in crons:
+        parts = expr.split()
+        if len(parts) != 5:
+            raise ValueError(f"cron {expr!r} has {len(parts)} fields, not 5")
+        mins, hrs, doms, months, dows = (
+            _cron_field_values(p, f) for p, f in zip(parts, ("minute", "hour", "dom", "month", "dow"), strict=True)
+        )
+        if 7 in dows:
+            dows = (dows - {7}) | {0}
+        both = parts[2] != "*" and parts[4] != "*"
+        cursor = _CRON_WINDOW_START
+        for idx in range(_CRON_GAP_WINDOW_DAYS):
+            dm, dw = cursor.day in doms, cursor.isoweekday() % 7 in dows
+            if cursor.month in months and ((dm or dw) if both else (dm and dw)):
+                day_times.setdefault(idx, set()).update(h * 60 + m for h in hrs for m in mins)
+            cursor += timedelta(days=1)
+    ordered = [d * 1440 + m for d in sorted(day_times) for m in sorted(day_times[d])]
+    if len(ordered) < 2:
+        raise ValueError("the schedule fires fewer than twice in the sample window")
+    return timedelta(minutes=max(b - a for a, b in zip(ordered, ordered[1:], strict=False)))
+
+
 def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
     """The bound is twice the declared cadence, so a declared cadence that drifts from the
     Dagster cron makes the check either blind (too long) or noisy (too short). Measured from
     the deployed root's own schedules with the cron reader."""
     from data_engine.dagster_defs import defs
-    from infra2_sdk.ci import largest_gap
 
     crons: dict[str, list[str]] = {}
     for schedule in defs.schedules or ():
@@ -795,7 +875,7 @@ def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
         )
         crons.setdefault(schedule.job_name, []).extend(expressions)
     for name, expectation in EXPECTED.items():
-        gap = largest_gap(crons[expectation.job])
+        gap = _largest_gap(crons[expectation.job])
         assert gap == timedelta(hours=expectation.cadence_hours), (
             f"{name}: declared cadence {expectation.cadence_hours} h, but job {expectation.job} fires every {gap}"
         )
@@ -803,10 +883,8 @@ def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
 
 def test_cron_treats_step_expressions_as_restricted_fields() -> None:
     """Only literal '*' is unrestricted in cron; step expressions like '*/2' restrict DOM/DOW."""
-    from infra2_sdk.ci import largest_gap
-
     # "0 0 */2 * 1" restricts both DOM (odd days) and DOW (Mondays), so even Mondays fire via OR -> max gap <= 2 days.
-    assert largest_gap(["0 0 */2 * 1"]) == timedelta(days=2)
+    assert _largest_gap(["0 0 */2 * 1"]) == timedelta(days=2)
 
 
 def test_a_missing_binary_is_no_grace_not_a_crash() -> None:

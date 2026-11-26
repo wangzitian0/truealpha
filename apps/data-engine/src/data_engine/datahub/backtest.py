@@ -34,7 +34,7 @@ from factors.backtest.engine import (
 )
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
-from infra2_sdk.runtime.environment import resolve_environment_tier
+from infra2_sdk.config import EnvironmentTier, resolve_tier
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition, QuarterlyCutoffSchedule
 from truealpha_runtime.config import is_deployed_tier
@@ -94,10 +94,11 @@ _NO_CODE_IDENTITY = ("", "unknown")
 
 def deployed_code_identity(environment: str, git_commit_sha: str) -> str:
     sha = (git_commit_sha or "").strip()
-    if (
-        is_deployed_tier(resolve_environment_tier(environment, unknown="production"))
-        and sha.lower() in _NO_CODE_IDENTITY
-    ):
+    try:
+        tier = resolve_tier(environment)
+    except ValueError:
+        tier = EnvironmentTier.PRODUCTION
+    if is_deployed_tier(tier) and sha.lower() in _NO_CODE_IDENTITY:
         raise RuntimeError(
             f"the backtest refuses to run in {environment!r} without a code identity: GIT_COMMIT_SHA is {git_commit_sha!r}; the deployment must inject the release ref"
         )

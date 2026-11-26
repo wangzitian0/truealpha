@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 import httpx2
-from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, create_llm_agent, llm_call_context
+from infra2_sdk.llm import DecodingSpec, LlmSettings, create_llm_agent, llm_call_context
 from openai import AsyncOpenAI
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import ModelHTTPError as SdkModelHTTPError
@@ -219,7 +219,7 @@ def call_provider(
     )
     call_site = _call_site(task)
     agent_decoding = DecodingSpec(
-        decoding.decoding_version,
+        decoding_version=decoding.decoding_version,
         thinking=decoding.thinking,
         temperature=decoding.temperature,
         max_tokens=task.max_tokens,

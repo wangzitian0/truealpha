@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from infra2_sdk.runtime.s3 import create_s3_client, is_not_found, put_object_bytes, read_object_bytes
+from infra2_sdk.storage import create_s3_client, is_not_found, put_object_bytes, read_object_bytes
 from pydantic import BaseModel, Field
 from truealpha_contracts.common import require_stable_and_immutable
 from truealpha_runtime.access import AccessContext

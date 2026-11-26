@@ -1,6 +1,6 @@
 from typing import Any
 
-from infra2_sdk.runtime.environment import RuntimeEnvKey
+from infra2_sdk.config import RuntimeEnvKey
 from pydantic import Field, SecretStr
 from truealpha_runtime import RuntimeSettings
 from truealpha_runtime.config import DEFAULT_DATABASE_URL, POSTGRES_PROVIDED_BY, _schema_field
@@ -28,7 +28,9 @@ class Settings(RuntimeSettings):
     configuration_sha256: str = _schema_field(
         "", "release", "release", validation_alias=RuntimeEnvKey.CONFIGURATION_SHA256.value
     )
-    database_url: str = _schema_field(DEFAULT_DATABASE_URL, "code", "postgres", composed_from=_APP_STACK_DSN)
+    database_url: str = _schema_field(
+        DEFAULT_DATABASE_URL, "code", "postgres", sensitive=True, composed_from=_APP_STACK_DSN
+    )
     app_service_db_password: SecretStr = Field(
         default=SecretStr(""),
         description="app_service_login database password for runtime DATABASE_URL (#432 Stage B)",
@@ -74,7 +76,7 @@ class Settings(RuntimeSettings):
     mcp_bearer_token: SecretStr | None = Field(
         default=None,
         description="Bearer token that every request to the MCP route must present",
-        json_schema_extra={"source": "runtime", "injected": True, "mirror_to_1password": True, "group": "mcp"},
+        json_schema_extra={"source": "runtime", "injected": True, "group": "mcp"},
     )
 
     # MCP streamable-HTTP transport security (FastMCP DNS-rebinding protection).
@@ -92,7 +94,7 @@ class Settings(RuntimeSettings):
     mcp_allowed_origins: list[str] = Field(
         default_factory=list, json_schema_extra={"source": "code", "empty_ok": True, "group": "mcp"}
     )
-    # infra2_sdk.fastapi.init_service reads these three names from the process environment (main.py).
+    # infra2_sdk.service.init_service reads these three names from the process environment (main.py).
     # An empty endpoint keeps telemetry off.
     otel_exporter_otlp_endpoint: str = _schema_field("", "code", "otel", empty_ok=True)
     otel_service_name: str = _schema_field("truealpha-llm-service", "code", "otel")

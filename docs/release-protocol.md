@@ -13,13 +13,13 @@ is the single contract between `truealpha` and the `infra2` release train.
 `.github/workflows/ci-python.yml` validates it alongside
 `apps/app-web/required-env.manifest.json`, `apps/data-engine/required-env.generated.json`,
 and `apps/llm-service/required-env.generated.json` on every CI run via
-`infra2_sdk.manifests.main(["--check"], ...)` and
-`python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json`.
+`python -m infra2_sdk.config check ...`, `EnvironmentManifest.validate_offline()`, and
+`python -m infra2_sdk.delivery check-hooks runtime-hooks.manifest.json`.
 
 It lists each check once, with its `needs`, `writes`, `accepts_scale` and `timeout_seconds`. The SDK
-maps each check to the cells of the stage grid (`infra2_sdk.manifests.CELL_POLICIES`) and runs a cell with
+maps each check to the cells of the stage grid (`infra2_sdk.delivery.CELL_POLICIES`) and runs a cell with
 `run_cell`; the cell budget comes from `CELL_POLICIES[cell].budget_seconds`. Run
-`python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json` to print the check-to-cell result.
+`python -m infra2_sdk.delivery check-hooks runtime-hooks.manifest.json` to print the check-to-cell result.
 A check leaves a default cell through `cells.remove` with a reason and an issue.
 The hook environment carries `APP_URL`, `APP_VERSION_REF` and `ENVIRONMENT`.
 A check `bootstrap` runs under a separate 120s cap (`BOOTSTRAP_CAP_SECONDS`) outside the cell budget. It installs no OS package: the `ubuntu-24.04`

@@ -15,8 +15,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, redact_llm_error
-from infra2_sdk.runtime.llm import schema_sha256 as sdk_schema_sha256
+from infra2_sdk.llm import DecodingSpec, LlmSettings, redact_llm_error
+from infra2_sdk.llm import schema_sha256 as sdk_schema_sha256
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -421,8 +421,7 @@ def invoke(
                 replayed := _replay(active_conn, task=task, cik=cik, accession=accession, model=model, requests=known)
             ) is not None:
                 return replayed
-        llm_cfg = LlmSettings.from_mapping(
-            {},
+        llm_cfg = LlmSettings(
             provider=settings.llm_provider,
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,

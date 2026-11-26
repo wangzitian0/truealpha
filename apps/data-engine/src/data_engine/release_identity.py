@@ -7,7 +7,7 @@ the three facts it is made of out of the running artifact:
                                   in infra2's compose -- the vX.Y.Z tag `pin_release`
                                   resolved), through `settings`, never `os.environ`.
     migration_ids                 the ordered ids of `db/migrations/*.sql` the image ships.
-    environment_contract_sha256   infra2-sdk's `manifest_config_fingerprint` over the
+    environment_contract_sha256   infra2-sdk's `EnvironmentManifest.fingerprint` over the
                                   environment contract the image ships
                                   (`apps/data-engine/required-env.generated.json`).
 
@@ -35,15 +35,14 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from infra2_sdk import manifests
-from infra2_sdk.runtime.config_schema import EnvironmentManifest, manifest_config_fingerprint
+from infra2_sdk.config import EnvironmentManifest
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.config import settings
 from data_engine.contracts.release import live_release_payload
 
 #: The environment contract this image ships and infra2's entrypoint boot-validates the
-#: process environment against (`infra2_sdk.runtime.config_schema.assert_environment`, #759).
+#: process environment against (`infra2_sdk.config.assert_env`, #759).
 ENV_MANIFEST_PATH = Path("apps/data-engine/required-env.generated.json")
 
 #: The migration set this image ships. `db/apply_migrations.sh` applies `db/migrations/*.sql`
@@ -96,13 +95,13 @@ def environment_contract(path: Path | None = None) -> EnvironmentManifest:
             f"the environment manifest {target} is not in the image; the release identity cannot be "
             f"measured and infra2's entrypoint cannot boot-validate this environment (#759, #784)"
         )
-    return manifests.load(target)
+    return EnvironmentManifest.from_file(target)
 
 
 def environment_contract_sha256(path: Path | None = None) -> str:
     """Fingerprint the environment CONTRACT -- the declarations, not the values.
 
-    `manifest_config_fingerprint` frames named inputs unambiguously and hashes each one before
+    `EnvironmentManifest.fingerprint` frames named inputs unambiguously and hashes each one before
     the outer digest. The inputs here are each field's full declaration, so the fingerprint
     moves when a variable is added, removed, renamed, or changes who produces it -- and does
     not move between staging and production, which is required: the deploy runner computes
@@ -114,7 +113,7 @@ def environment_contract_sha256(path: Path | None = None) -> str:
         field.env: json.dumps(field.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         for field in manifest.fields
     }
-    return manifest_config_fingerprint(manifest, declarations)
+    return manifest.fingerprint(declarations)
 
 
 def measure(

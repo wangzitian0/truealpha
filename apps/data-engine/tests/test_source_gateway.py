@@ -1186,7 +1186,7 @@ def test_a_gateway_call_row_survives_the_rollback_of_the_callers_transaction(war
 
 
 def test_capacity_gate_delegates_local_sliding_window_to_sdk_rate_limit_window() -> None:
-    from infra2_sdk.capacity import RateLimitWindow
+    from infra2_sdk.service import RateLimitWindow
 
     clock = [0.0]
     slept: list[float] = []
@@ -1309,7 +1309,7 @@ def test_environment_tier_helpers_converged() -> None:
 
 def test_llm_agent_binds_llm_call_context_and_preserves_replay_bytes(call_ledger, monkeypatch) -> None:
     from data_engine.sources import llm
-    from infra2_sdk.runtime import llm as sdk_llm
+    from infra2_sdk import llm as sdk_llm
 
     seen_ctx: list[dict[str, object]] = []
     sent_bodies: list[bytes] = []

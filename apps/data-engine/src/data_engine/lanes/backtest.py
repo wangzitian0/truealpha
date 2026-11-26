@@ -3,7 +3,7 @@
 import json
 
 import dagster as dg
-from infra2_sdk.runtime.environment import EnvironmentTier, resolve_environment_tier
+from infra2_sdk.config import EnvironmentTier, resolve_tier
 from truealpha_contracts.strategy import load_strategy_definition as load_packaged_strategy_definition
 
 from data_engine import db
@@ -43,7 +43,7 @@ def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, obj
 
 def schedule_status(environment: str) -> dg.DefaultScheduleStatus:
     try:
-        scheduled = resolve_environment_tier(environment) in _SCHEDULED_TIERS
+        scheduled = resolve_tier(environment) in _SCHEDULED_TIERS
     except ValueError:
         scheduled = False
     return dg.DefaultScheduleStatus.RUNNING if scheduled else dg.DefaultScheduleStatus.STOPPED

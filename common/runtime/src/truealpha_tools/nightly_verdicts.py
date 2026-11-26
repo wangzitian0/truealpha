@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from infra2_sdk.runtime.environment import resolve_environment_tier
+from infra2_sdk.config import resolve_tier
 
 HttpGet = Callable[[str], tuple[int, str]]
 GitRun = Callable[..., subprocess.CompletedProcess[str]]
@@ -115,7 +115,7 @@ def scheduled_lanes(contract_text: str, environment: str | None = None) -> list[
     if environment is None:
         specs = list(environments.values())
     else:
-        name = resolve_environment_tier(environment).value
+        name = resolve_tier(environment).value
         specs = [environments[name]] if name in environments else []
     scheduled: list[str] = []
     for spec in specs:
@@ -337,6 +337,13 @@ def judge(
     return failures
 
 
+def _default_http_get(url: str) -> tuple[int, str]:
+    from infra2_sdk.delivery import default_http_get
+
+    status, body = default_http_get(url, 15.0)
+    return status, body.decode("utf-8", errors="replace")
+
+
 def check_nightly_verdicts(
     url: str,
     *,
@@ -348,9 +355,7 @@ def check_nightly_verdicts(
     first_declared: FirstDeclared | None = None,
 ) -> int:
     if http_get is None:
-        from infra2_sdk.deploy import default_http_get
-
-        http_get = default_http_get()
+        http_get = _default_http_get
     reader = reader or git_release_reader()
     name = environment or url
     try:

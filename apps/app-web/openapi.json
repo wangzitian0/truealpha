@@ -1904,34 +1904,6 @@
         ],
         "title": "CardKind"
       },
-      "CheckDetail": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
-          },
-          "duration_ms": {
-            "type": "number",
-            "title": "Duration Ms"
-          },
-          "required": {
-            "type": "boolean",
-            "title": "Required"
-          }
-        },
-        "type": "object",
-        "required": [
-          "status",
-          "detail",
-          "duration_ms",
-          "required"
-        ],
-        "title": "CheckDetail"
-      },
       "ConstructionBacktestDto": {
         "properties": {
           "strategy_key": {
@@ -3212,7 +3184,7 @@
           },
           "checks": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/CheckDetail"
+              "$ref": "#/components/schemas/_CheckDetail"
             },
             "type": "object",
             "title": "Checks"
@@ -3972,6 +3944,7 @@
             "title": "Reasons"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "status",
@@ -5313,6 +5286,35 @@
           "node_key"
         ],
         "title": "WidePanelCellDto"
+      },
+      "_CheckDetail": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "detail",
+          "duration_ms",
+          "required"
+        ],
+        "title": "_CheckDetail"
       }
     }
   }

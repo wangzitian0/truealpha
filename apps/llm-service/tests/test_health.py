@@ -798,7 +798,7 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
 def test_init_service_registers_livez_readyz_and_sdk_health_with_extra(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """infra2_sdk.fastapi.init_service provides /livez, /readyz, and OpenAPI /health with health_extra."""
+    """infra2_sdk.service.init_service provides /livez, /readyz, and OpenAPI /health with health_extra."""
     _stub_no_db_when_unarmed(monkeypatch)
     client = TestClient(app)
 

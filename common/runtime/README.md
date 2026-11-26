@@ -9,7 +9,7 @@ and `staging.entity_relations` (`docs/entity-identity.md`).
 
 Environment model:
 
-`infra2_sdk.runtime.environment` owns the tier enum and alias normalization.
+`infra2_sdk.config` owns the tier enum and alias normalization.
 `truealpha_runtime.config` exposes `ENVIRONMENT` as `environment` and preserves the
 unknown-environment error. Canonical tier names and preview aliases are accepted;
 the dependency instances and which tiers require each service remain TrueAlpha-owned.
@@ -31,7 +31,7 @@ the dependency instances and which tiers require each service remain TrueAlpha-o
 
 Telemetry (#1034):
 
-Python services call `infra2_sdk.runtime.otel` directly. It emits structured stdout JSON logs and OTLP/HTTP traces, metrics (including `process.uptime`),
+Python services call `infra2_sdk.telemetry` directly. It emits structured stdout JSON logs and OTLP/HTTP traces, metrics (including `process.uptime`),
 and `INFO+` logs to infra2's shared SigNoz; there is no exporter code in this repository.
 It is the application half of infra2 `ops.observability` section 4.2:
 
@@ -45,9 +45,9 @@ It is the application half of infra2 `ops.observability` section 4.2:
   `ENVIRONMENT` is not consulted for OTEL identity: a preview stack
   runs with `ENVIRONMENT=staging` and its own `deployment.environment.name` (`pr-12`,
   `canary-preview`, ...), which is exported as issued.
-- Services with HTTP APIs (`llm_service.main`) call `infra2_sdk.fastapi.init_service` for
+- Services with HTTP APIs (`llm_service.main`) call `infra2_sdk.service.init_service` for
   FastAPI instrumentation, `X-Request-ID`, `/livez`, `/readyz`, `/health`, and probe suppression;
-  worker processes (`data_engine.dagster_defs`) call `infra2_sdk.runtime.otel.init_worker`. The Next.js app is not
+  worker processes (`data_engine.dagster_defs`) call `infra2_sdk.telemetry.init_worker`. The Next.js app is not
   a Python service and is out of scope.
 - Complements init.md rule 9: Dagster's UI remains the surface for pipeline runs; this adds
   application-level signals (request errors, latency, logs) that infra2 can alert on.

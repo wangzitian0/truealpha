@@ -107,7 +107,7 @@ def test_with_an_endpoint_but_without_the_identity_the_code_location_refuses_to_
     environ = {key: value for key, value in DEPLOYED.items() if key != missing}
     result = run_python_probe(STATE_PROBE, {**environ, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
     assert result.returncode != 0, "the code location loaded and would have exported untagged telemetry"
-    assert "requires ServiceIdentity attributes when an OTLP endpoint is set" in result.stderr
+    assert "telemetry requires issued identity attributes when OTLP endpoint is set" in result.stderr
     assert named in result.stderr
     assert IAC_REF not in result.stderr, "names only, never values"
 

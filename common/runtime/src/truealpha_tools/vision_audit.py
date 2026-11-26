@@ -11,8 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from data_engine.environment_universes import scheduled_universe_names
-from infra2_sdk.deploy import default_http_get
-from infra2_sdk.routing import resolve_app_hostname
+from infra2_sdk.delivery import default_http_get
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.goal_criteria import load_goal_criteria
 
@@ -20,8 +19,14 @@ from truealpha_tools.nightly_verdicts import EXPECTATIONS_PATH, HealthReport, pa
 
 
 def _health_url_for(env: str) -> str:
-    host = resolve_app_hostname("truealpha", env, base_domain="truealpha.club", custom_prod_domain="truealpha.club")
+    tier = env.strip().lower()
+    host = "truealpha.club" if tier in {"prod", "production"} else f"{tier}.truealpha.club"
     return f"https://{host}/api/health"
+
+
+def _http_get(url: str) -> tuple[int, str]:
+    status, body = default_http_get(url, 15.0)
+    return status, body.decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True)
@@ -270,7 +275,7 @@ def audit_vision(
     resolved_url = health_url or _health_url_for(env)
     check_now = now or datetime.now(UTC)
     try:
-        report: HealthReport = read_report(resolved_url, default_http_get())
+        report: HealthReport = read_report(resolved_url, _http_get)
         verdicts_list = report.verdicts or []
         verdicts_by_check = {v.check: v for v in verdicts_list}
         verdicts_summary: dict[str, Any] = {

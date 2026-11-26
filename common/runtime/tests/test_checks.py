@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import psycopg
 import pytest
 from botocore.exceptions import ClientError
-from infra2_sdk.runtime.health import DependencyStatus, ProbeResult
+from infra2_sdk.service import DependencyStatus, ProbeResult
 from truealpha_runtime import checks as checks_module
 from truealpha_runtime.checks import (
     DatabaseCheck,
@@ -34,6 +34,9 @@ class FakeConnection:
         self.executed_queries.append(query)
         return self
 
+    def cursor(self) -> FakeConnection:
+        return self
+
     def fetchone(self) -> tuple | None:
         return self.query_result
 
@@ -60,9 +63,8 @@ def test_database_check_reports_present_when_select_1_succeeds(monkeypatch: pyte
 
     assert isinstance(result, ProbeResult)
     assert result.status is DependencyStatus.PRESENT
-    assert result.present is True
     assert result.name == "database"
-    assert "SELECT 1 succeeded" in result.detail
+    assert result.detail == "ok"
     assert result.duration_ms >= 0
 
 
@@ -83,7 +85,6 @@ def test_database_check_redacts_credentials_on_connection_failure(
     result = DatabaseCheck(settings).probe()
 
     assert result.status is DependencyStatus.ABSENT
-    assert result.present is False
     assert result.name == "database"
     assert secret_password not in result.detail
     assert "<redacted>" in result.detail
@@ -119,7 +120,7 @@ def test_database_check_redacts_dsn_and_password_when_the_probe_itself_raises(
     assert result.detail.startswith("LeakyError: ")
     assert LEAKED_PASSWORD not in result.detail
     assert LEAKED_DSN not in result.detail
-    assert "<redacted-postgres-dsn>" in result.detail
+    assert "postgresql://[REDACTED]" in result.detail
 
 
 def test_database_check_reports_only_the_error_type_when_settings_construction_fails(
@@ -144,7 +145,7 @@ def test_graph_store_check_redacts_dsn_and_password_on_connection_failure(
     assert result.detail.startswith("LeakyError: ")
     assert LEAKED_PASSWORD not in result.detail
     assert LEAKED_DSN not in result.detail
-    assert "<redacted-postgres-dsn>" in result.detail
+    assert "postgresql://[REDACTED]" in result.detail
 
 
 def test_graph_store_check_reports_only_the_error_type_when_settings_construction_fails(
@@ -170,7 +171,6 @@ def test_graph_store_check_reports_present_when_tables_exist(monkeypatch: pytest
     result = GraphStoreCheck(settings).probe()
 
     assert result.status is DependencyStatus.PRESENT
-    assert result.present is True
     assert result.name == "graph_store"
     assert "present" in result.detail
 
@@ -188,7 +188,6 @@ def test_graph_store_check_reports_absent_when_tables_missing(
     result = GraphStoreCheck(settings).probe()
 
     assert result.status is DependencyStatus.ABSENT
-    assert result.present is False
     assert result.name == "graph_store"
     assert "missing" in result.detail
 
@@ -199,12 +198,13 @@ def test_object_storage_check_reports_present_when_bucket_accessible() -> None:
     store.client = fake_client
     store.s3_settings = MagicMock()
     store.s3_settings.bucket = "test-bucket"
+    store.s3_settings.access_key_id = "test-key"
+    store.s3_settings.secret_access_key = "test-secret"
 
     settings = RuntimeSettings(_env_file=None)
     result = ObjectStorageCheck(settings, store=store).probe()
 
     assert result.status is DependencyStatus.PRESENT
-    assert result.present is True
     assert result.name == "object_storage"
 
 
@@ -214,12 +214,13 @@ def test_object_storage_check_reports_absent_on_error() -> None:
     store.client = fake_client
     store.s3_settings = MagicMock()
     store.s3_settings.bucket = "test-bucket"
+    store.s3_settings.access_key_id = "test-key"
+    store.s3_settings.secret_access_key = "test-secret"
 
     settings = RuntimeSettings(_env_file=None)
     result = ObjectStorageCheck(settings, store=store).probe()
 
     assert result.status is DependencyStatus.ABSENT
-    assert result.present is False
     assert result.name == "object_storage"
 
 

@@ -9,8 +9,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
-from infra2_sdk.fastapi import init_service
-from infra2_sdk.runtime.config_schema import assert_environment
+from infra2_sdk.config import assert_env
+from infra2_sdk.service import init_service
 from starlette.types import ASGIApp, Receive, Scope, Send
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.checks import redact_postgres_exception
@@ -72,7 +72,7 @@ _mcp_runtime = _McpRuntime()
 
 
 def refuse_to_boot_on_a_missing_environment() -> None:
-    assert_environment(ENV_MANIFEST_PATH, require_injected=settings.is_deployed)
+    assert_env(ENV_MANIFEST_PATH, require_injected=settings.is_deployed)
 
 
 @asynccontextmanager

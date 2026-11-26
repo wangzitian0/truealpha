@@ -37,7 +37,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -66,7 +65,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -85,7 +83,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -104,7 +101,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -123,7 +119,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -142,7 +137,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -161,7 +155,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     },
@@ -180,7 +173,6 @@
       "scope": "env",
       "provided_by": "",
       "composed_from": "",
-      "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
     }

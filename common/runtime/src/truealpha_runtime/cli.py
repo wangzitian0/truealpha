@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from infra2_sdk.runtime.health import check_health
+from infra2_sdk.service import evaluate_health
 
 from truealpha_runtime.checks import DatabaseCheck, GraphStoreCheck, ObjectStorageCheck
 from truealpha_runtime.config import RuntimeSettings
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     checks = (DatabaseCheck(settings), GraphStoreCheck(settings), ObjectStorageCheck(settings))
     status_code, body = asyncio.run(
-        check_health(
+        evaluate_health(
             checks,
             manifest=DEPENDENCY_MANIFEST,
             tier=settings.environment_tier,

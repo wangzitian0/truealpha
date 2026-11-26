@@ -15,7 +15,7 @@ dependencies = [
     # with 0.29.12.
     "dagster-postgres==0.29.12",
     "httpx>=0.27.0",
-    # sources/llm_agent.py builds the SDK agent on these; pydantic-ai-slim[zai] comes from infra2-sdk[pydantic-ai] via truealpha-runtime.
+    # sources/llm_agent.py builds the SDK agent on these; pydantic-ai-slim[zai] comes from infra2-sdk[llm] via truealpha-runtime.
     "httpx2>=2.16",
     "openai>=3.57",
     "moomoo-api>=10.8.6808",

@@ -4,8 +4,8 @@ import hashlib
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
-from infra2_sdk.runtime.s3 import create_s3_client, is_not_found, read_object_bytes
-from infra2_sdk.runtime.s3 import ensure_bucket as ensure_bucket_sdk
+from infra2_sdk.storage import S3Settings, create_s3_client, is_not_found, read_object_bytes
+from infra2_sdk.storage import ensure_bucket as ensure_bucket_sdk
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
 from truealpha_runtime.config import RuntimeSettings
@@ -43,9 +43,21 @@ class S3RawObjectStore:
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
         self.settings = settings or RuntimeSettings()
         self.bucket = self.settings.s3_bucket
-        self.s3_settings = self.settings.to_s3_settings()
         self._has_injected_client = client is not None
-        self.client = client or create_s3_client(self.s3_settings)
+        self._s3_settings: S3Settings | None = None
+        self._client: Any | None = client
+
+    @property
+    def s3_settings(self) -> S3Settings:
+        if self._s3_settings is None:
+            self._s3_settings = self.settings.to_s3_settings()
+        return self._s3_settings
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            self._client = create_s3_client(self.s3_settings)
+        return self._client
 
     def _require_endpoint(self) -> None:
         if self._has_injected_client:
@@ -59,7 +71,10 @@ class S3RawObjectStore:
         self._require_endpoint()
         allow_create = self.settings.may_create_bucket if create is None else create
         try:
-            ensure_bucket_sdk(self.s3_settings, client=self.client, allow_create=allow_create)
+            if allow_create:
+                ensure_bucket_sdk(self.client, self.bucket, self.settings.s3_region)
+            else:
+                self.client.head_bucket(Bucket=self.bucket)
         except Exception as exc:
             raise StorageError(f"cannot access or create bucket {self.bucket}: {exc}") from exc
 

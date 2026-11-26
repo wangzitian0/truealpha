@@ -9,7 +9,7 @@ copy of this script, so the tests live next to the script here.
 
 ### Mutation evidence
 
-- Remove the `python -c "...assert_environment(...)"` line from the script: 3 tests fail.
+- Remove the `python -c "...assert_env(...)"` line from the script: 3 tests fail.
   These are `test_entrypoint_refuses_to_start_when_a_declared_variable_is_missing`,
   `test_entrypoint_requires_injected_variables_not_only_required_ones` and
   `test_entrypoint_reads_the_manifest_at_the_path_the_image_ships`. The script runs
@@ -58,7 +58,7 @@ TARGET_SCRIPT = """\
 
 def _write_manifest(root, declared, manifest_path=EXPECTED_MANIFEST_PATH):
     """Write a manifest in the real SDK format: each declared name must be injected."""
-    from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+    from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 
     manifest = EnvironmentManifest(
         source="test",
@@ -113,7 +113,7 @@ def test_entrypoint_refuses_to_start_when_a_declared_variable_is_missing(tmp_pat
 
     assert result.returncode != 0
     # The validator ran and named the missing variable. A failed import fails differently.
-    assert "environment lacks 1 value(s)" in result.stderr, result.stderr
+    assert "missing 1 variable(s)" in result.stderr, result.stderr
     assert "SEC_API_KEY" in result.stderr
     assert "ModuleNotFoundError" not in result.stderr
     assert not target_log.exists(), "exec ran after the validator failed"
@@ -154,7 +154,7 @@ def test_entrypoint_reads_the_manifest_at_the_path_the_image_ships(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "is not in the image" in result.stderr, result.stderr
+    assert "is missing" in result.stderr, result.stderr
     assert EXPECTED_MANIFEST_PATH in ENTRYPOINT.read_text(encoding="utf-8")
     assert not target_log.exists()
 

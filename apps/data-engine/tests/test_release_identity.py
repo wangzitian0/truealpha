@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 from data_engine import release_identity
 from data_engine.config import Settings
-from infra2_sdk.runtime.config_schema import manifest_config_fingerprint
 from truealpha_contracts.common import canonical_sha256
 
 pytestmark = pytest.mark.gate
@@ -50,7 +49,7 @@ def test_the_image_ships_the_manifest_where_boot_validation_and_the_identity_rea
     its own manifest, `apps/llm-service/tests/test_boot.py`).
 
     Red before #784: the data-engine image shipped no `required-env.generated.json` at all,
-    so infra2's entrypoint could not run `infra2_sdk.runtime.config_schema.assert_environment` for it
+    so infra2's entrypoint could not run `infra2_sdk.config.assert_env` for it
     and the absence was invisible from outside the container.
     """
     lines = DOCKERFILE.read_text(encoding="utf-8").splitlines()
@@ -64,7 +63,7 @@ def test_the_image_ships_the_manifest_where_boot_validation_and_the_identity_rea
 
 def test_a_missing_input_is_a_named_failure_never_a_default(tmp_path: Path) -> None:
     """An identity computed from whatever happened to be present would be a DIFFERENT
-    identity, silently. Both failures name the file, the way `infra2_sdk.runtime.config_schema.assert_environment` does."""
+    identity, silently. Both failures name the file, the way `infra2_sdk.config.assert_env` does."""
     with pytest.raises(RuntimeError, match="environment manifest"):
         _measure(env_manifest_path=tmp_path / "required-env.generated.json")
     with pytest.raises(RuntimeError, match="migration set"):
@@ -120,8 +119,7 @@ def test_the_contract_fingerprint_hashes_the_declarations_not_the_deployed_value
     in hand and must reach the same answer as the container; and a value that changed
     between staging and production would give one release two identities."""
     manifest = release_identity.environment_contract(REPO_ROOT / "apps/data-engine/required-env.generated.json")
-    expected = manifest_config_fingerprint(
-        manifest,
+    expected = manifest.fingerprint(
         {
             field.env: json.dumps(field.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
             for field in manifest.fields
@@ -228,7 +226,7 @@ def test_the_entrypoint_waits_for_secrets_then_execs_the_command(tmp_path: Path)
     secrets = tmp_path / ".env"
     secrets.write_text("DATABASE_URL=postgresql://u@h/db\n", encoding="utf-8")
     env = {"PATH": str(Path(sys.executable).parent) + ":/usr/bin:/bin", "SECRETS_ENV_FILE": str(secrets)}
-    # `assert_environment` needs the injected variables the manifest names; none are set here, so
+    # `assert_env` needs the injected variables the manifest names; none are set here, so
     # the script must stop before `exec` and name the failure instead of running the command.
     result = subprocess.run(
         ["/bin/sh", str(REPO_ROOT / "apps/data-engine/dagster-entrypoint.sh"), "echo", "RAN"],
@@ -241,7 +239,7 @@ def test_the_entrypoint_waits_for_secrets_then_execs_the_command(tmp_path: Path)
     )
     assert result.returncode != 0
     assert "RAN" not in result.stdout
-    assert "environment lacks" in result.stderr
+    assert "missing " in result.stderr
 
     # With every injected name present the script reaches `exec` and runs the command.
     injected = {

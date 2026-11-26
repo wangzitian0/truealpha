@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from infra2_sdk.runtime.llm import DecodingSpec
+from infra2_sdk.llm import DecodingSpec
 
 from data_engine.sources import model_policy
 
-V1 = DecodingSpec("v1", thinking=False, temperature=0.0)
-V2 = DecodingSpec("v2", thinking="low", temperature=0.0)
+V1 = DecodingSpec(decoding_version="v1", thinking=False, temperature=0.0)
+V2 = DecodingSpec(decoding_version="v2", thinking="low", temperature=0.0)
 KNOWN: tuple[DecodingSpec, ...] = (V1, V2)
 
 

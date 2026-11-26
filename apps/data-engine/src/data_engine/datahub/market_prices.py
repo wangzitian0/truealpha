@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import psycopg
-from infra2_sdk.runtime.http import request_with_retry
+from infra2_sdk.service import request_with_retry
 from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings

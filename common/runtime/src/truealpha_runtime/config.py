@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import cached_property
 from typing import Any
 
-from infra2_sdk.runtime.environment import EnvironmentTier
-from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
-from infra2_sdk.runtime.postgres import PostgresSettings
-from infra2_sdk.runtime.s3 import S3Settings
+from infra2_sdk.config import EnvironmentTier
+from infra2_sdk.config import resolve_tier as _resolve_tier
+from infra2_sdk.storage import PostgresSettings, S3Settings
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_S3_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 POSTGRES_PROVIDED_BY = "truealpha/postgres:POSTGRES_PASSWORD"
@@ -34,7 +36,9 @@ def _schema_field(default: Any, source: str, group: str, **kw: Any) -> Any:
 
 def database_url_field(*, composed_from: str | None = None) -> Any:
     kw = {"composed_from": composed_from} if composed_from is not None else {}
-    return _schema_field(DEFAULT_DATABASE_URL, "runtime", "postgres", provided_by=POSTGRES_PROVIDED_BY, **kw)
+    return _schema_field(
+        DEFAULT_DATABASE_URL, "runtime", "postgres", sensitive=True, provided_by=POSTGRES_PROVIDED_BY, **kw
+    )
 
 
 def resolve_environment_tier(environment: str, *, github_actions: bool = False) -> EnvironmentTier:
@@ -61,7 +65,7 @@ class CoreRuntimeSettings(BaseSettings):
     @classmethod
     def validate_database_url(cls, value: str) -> str:
         try:
-            PostgresSettings(dsn=value)
+            PostgresSettings(url=value)
         except ValueError as exc:
             raise ValueError("DATABASE_URL must use PostgreSQL") from exc
         return value
@@ -87,11 +91,10 @@ class RuntimeSettings(CoreRuntimeSettings):
     @field_validator("s3_bucket")
     @classmethod
     def validate_bucket(cls, value: str) -> str:
-        try:
-            S3Settings(bucket=value)
-        except ValueError as exc:
-            raise ValueError("S3_BUCKET must be a lowercase S3-compatible bucket name") from exc
-        return value
+        cleaned = value.strip()
+        if not _S3_BUCKET_RE.fullmatch(cleaned) or ".." in cleaned:
+            raise ValueError("S3_BUCKET must be a lowercase S3-compatible bucket name")
+        return cleaned
 
     @property
     def may_create_bucket(self) -> bool:
@@ -102,13 +105,20 @@ class RuntimeSettings(CoreRuntimeSettings):
         }
 
     def to_s3_settings(self) -> S3Settings:
+        endpoint = (self.s3_endpoint or "").strip()
+        access_key = self.s3_access_key.strip()
+        secret_key = self.s3_secret_key.get_secret_value().strip()
+        if not endpoint:
+            raise ValueError("S3_ENDPOINT must not be empty")
+        if not access_key or not secret_key:
+            raise ValueError("S3_ACCESS_KEY and S3_SECRET_KEY must not be empty")
         return S3Settings(
+            endpoint_url=endpoint,
             bucket=self.s3_bucket,
-            endpoint_url=(self.s3_endpoint or "").strip() or None,
-            access_key_id=self.s3_access_key or None,
-            secret_access_key=self.s3_secret_key.get_secret_value() or None,
-            region_name=self.s3_region,
-            addressing_style="path",
+            access_key_id=access_key,
+            secret_access_key=secret_key,
+            region=self.s3_region,
+            use_path_style=True,
             connect_timeout_seconds=float(self.s3_connect_timeout_seconds),
             read_timeout_seconds=float(self.s3_connect_timeout_seconds),
         )
