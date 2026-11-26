@@ -20,7 +20,9 @@ and can be launched by name with an explicit `executed_at`. `/admin/datahub` ren
 newest report per universe.
 
 **Identity is the graded content, not the compile (#885).** `report_id` is the sha256 of
-the canonical payload *without* `generated_at` (`confidence_report.COMPILE_STAMPS`). A
+the canonical payload *without* compile stamps (`generated_at` and precomputed `tier_counts` in
+`confidence_report.COMPILE_STAMPS`). Display bands come from `confidence_bands.v1.json`
+(`>= 0.80` high, `>= 0.60` medium, `< 0.60` low). A
 nightly compile over an unchanged head that grades exactly what the last one graded
 resolves to the existing row (`on conflict do nothing`), so the table grows by one row
 per changed report, not one per night; the stored `generated_at` names the compile that

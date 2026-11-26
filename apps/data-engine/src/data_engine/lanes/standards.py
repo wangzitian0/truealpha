@@ -862,6 +862,7 @@ standard_history_schedule = _cron_schedule(
             run_config=history_run_config(t, u),
         )
         for key in universes_with_role("strategy")
+        if lane_name(key) in scheduled_universe_names()
     ],
     name="standard_history_schedule",
 )

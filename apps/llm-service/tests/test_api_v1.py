@@ -773,10 +773,11 @@ def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
                 "cells": {
                     "close": {
                         "a": {"tier": "High", "confidence": "0.95"},
-                        "b": {"tier": "", "confidence": "0.82"},
-                        "c": {"tier": "", "confidence": "0.60"},
-                        "d": {"tier": "", "confidence": "0.55"},
-                        "e": {"tier": "Low", "confidence": "0.20"},
+                        "b": {"tier": "", "confidence": "0.80"},
+                        "c": {"tier": "", "confidence": "0.79"},
+                        "d": {"tier": "", "confidence": "0.60"},
+                        "e": {"tier": "", "confidence": "0.59"},
+                        "f": {"tier": "Low", "confidence": "0.20"},
                     }
                 },
                 "sample": {"close": [{"subject": "a"}]},
@@ -784,8 +785,22 @@ def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
         }
     )
     assert "cells" not in row["payload"] and "sample" not in row["payload"]
-    assert row["payload"]["tier_counts"] == {"close": {"high": 2, "medium": 1, "low": 2}}
+    assert row["payload"]["tier_counts"] == {"close": {"high": 2, "medium": 2, "low": 2}}
     assert row["summary"]["sources_count"] == 2 and row["summary"]["families_count"] == 1
+
+    precomputed = admin_service._summarize_confidence_row(
+        {
+            "universe_id": "universe:sp500-us-2026-09-30",
+            "payload": {
+                "subjects": 500,
+                "sources_connected": ["sec", "yahoo"],
+                "families": {"close": {"cells": 500}},
+                "tier_counts": {"close": {"high": 400, "medium": 80, "low": 20}},
+                "cells": {"close": {"x": {"tier": "Low", "confidence": "0.10"}}},
+            },
+        }
+    )
+    assert precomputed["payload"]["tier_counts"] == {"close": {"high": 400, "medium": 80, "low": 20}}
 
     bounds = admin_service._attach_wilson_upper_bounds(
         [

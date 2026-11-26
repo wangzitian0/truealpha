@@ -110,7 +110,7 @@ _RATIO_PLACES = Decimal("0.0001")
 _DELTA_PLACES = Decimal("0.000001")
 CONTINUOUS_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 UNSERVED_REASONS = frozenset({"no_origin_value", "not_knowable_at_cutoff", "no_eligible_origin"})
-COMPILE_STAMPS: tuple[str, ...] = ("generated_at",)
+COMPILE_STAMPS: tuple[str, ...] = ("generated_at", "tier_counts")
 _COMPARED_OUTCOMES = frozenset({ReconciliationOutcome.AGREED.value, ReconciliationOutcome.CONFLICT_ABSTAINED.value})
 _AGGREGATE_COMPARED_OUTCOMES = _COMPARED_OUTCOMES | {ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value}
 _CELL_CONFIDENCE_INSERT_SQL = (
@@ -1063,6 +1063,14 @@ def build_report(
     all_origins = [o for s in subjects.values() for fam in s.origins.values() for o in fam]
     all_origins.extend(o for fo in plane_origins.values() for lo in fo.values() for o in lo)
     lineages = sorted({o.lineage for o in all_origins if o.value is not None})
+    tier_counts = {
+        name: {
+            "high": sum(1 for grade in cells.values() if grade.confidence >= Decimal("0.80")),
+            "medium": sum(1 for grade in cells.values() if Decimal("0.60") <= grade.confidence < Decimal("0.80")),
+            "low": sum(1 for grade in cells.values() if grade.confidence < Decimal("0.60")),
+        }
+        for name, cells in grades.items()
+    }
     return {
         "report_version": REPORT_VERSION,
         "universe": universe,
@@ -1075,6 +1083,7 @@ def build_report(
         "subjects": len(subjects),
         "sources_connected": lineages,
         "families": families,
+        "tier_counts": tier_counts,
         "cells": {name: {sid: grade.payload() for sid, grade in cells.items()} for name, cells in grades.items()},
         "sample": sample,
         "accuracy": accuracy,

@@ -1059,3 +1059,39 @@ def test_vision_audit_evaluates_all_30_criteria_and_separates_live_health_from_p
     by_id = {c.criterion_id: c for c in report.criteria}
     assert any("STALE" in c.evidence for c in by_id.values())
     assert by_id["R3.C1"].verified is False
+
+
+def test_vision_audit_staging_health_url_and_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    import urllib.request
+
+    from truealpha_tools import vision_audit
+
+    assert vision_audit._health_url_for("staging") == "https://truealpha-staging.truealpha.club/api/health"
+    assert vision_audit._health_url_for("prod") == "https://truealpha.club/api/health"
+
+    captured_headers: list[dict[str, str]] = []
+
+    class _Resp:
+        status = 200
+
+        def read(self) -> bytes:
+            return b'{"status":"ok"}'
+
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+    def _fake_urlopen(req: urllib.request.Request, timeout: float = 0.0) -> _Resp:
+        del timeout
+        captured_headers.append({k.lower(): v for k, v in req.header_items()})
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    status, body = vision_audit._http_get("https://truealpha-staging.truealpha.club/api/health")
+    assert status == 200 and "ok" in body
+    assert captured_headers[0]["user-agent"] == "truealpha-ops-audit/1.0"
+    nv_status, nv_body = _module._default_http_get("https://truealpha-staging.truealpha.club/api/health")
+    assert nv_status == 200 and "ok" in nv_body
+    assert captured_headers[1]["user-agent"] == "truealpha-ops-audit/1.0"

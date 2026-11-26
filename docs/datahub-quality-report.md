@@ -102,7 +102,7 @@ close of the target's settled session. The first that has it serves the cell:
 - declared: the payload carries `served_by_failover: "<origin>"`, and the obligation result
   carries `served_by_failover` beside the primary's reason codes (the attempts keep the
   primary's failure; the terminal attempt is `success` with the primary's reason);
-- continuous confidence scoring: failover-served cells receive continuous confidence scoring via `evaluate_continuous_confidence` in `confidence_report.py` (rather than discrete step drops);
+- continuous confidence scoring: failover-served cells receive continuous confidence scoring via `evaluate_continuous_confidence` in `confidence_report.py` with a 0.90 sample-conformance attenuation factor (display bands in `confidence_bands.v1.json`: `>= 0.80` high, `>= 0.60` medium, `< 0.60` low);
 - only for the same session, knowable by the run's cutoff instant: another day's close, or
   one knowable after the cutoff, cannot serve. Without a market calendar a holiday tick's
   target session has no bar at any origin, so a primary failure on a holiday still leaves

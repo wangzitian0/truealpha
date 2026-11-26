@@ -52,10 +52,18 @@ def target_symbols(
     )
 
 
-def refresh_order(symbols: Sequence[str], newest: Mapping[str, date]) -> list[str]:
-    never = sorted(symbol for symbol in symbols if symbol not in newest)
-    stored = sorted((symbol for symbol in symbols if symbol in newest), key=lambda symbol: (newest[symbol], symbol))
-    return never + stored
+def refresh_order(
+    symbols: Sequence[str],
+    newest: Mapping[str, date],
+    *,
+    unavailable: Collection[str] = (),
+) -> list[str]:
+    unavail = set(unavailable)
+    never = sorted(s for s in symbols if s not in newest and s not in unavail)
+    stored = sorted((s for s in symbols if s in newest and s not in unavail), key=lambda s: (newest[s], s))
+    deferred_never = sorted(s for s in symbols if s not in newest and s in unavail)
+    deferred_stored = sorted((s for s in symbols if s in newest and s in unavail), key=lambda s: (newest[s], s))
+    return never + stored + deferred_never + deferred_stored
 
 
 @dataclass(frozen=True)
@@ -115,6 +123,43 @@ def newest_sessions(connection: psycopg.Connection, symbols: Sequence[str]) -> d
     return {symbol: history.last_session for symbol, history in histories.items() if isinstance(history, SplitHistory)}
 
 
+def recent_unavailable_symbols(
+    connection: psycopg.Connection,
+    symbols: Sequence[str],
+    *,
+    now: datetime,
+    lookback_days: int = 7,
+) -> set[str]:
+    wanted = set(symbols)
+    if not wanted:
+        return set()
+    since = now.astimezone(UTC) - timedelta(days=lookback_days)
+    try:
+        rows = connection.execute(
+            "select fetch_key, request_params->>'symbol' from staging.api_call_ledger "
+            "where source = %s and caller = %s and called_at >= %s and not ok "
+            "and (status_code = 404 or lower(coalesce(error, '')) like '%%not found%%' "
+            "or lower(coalesce(error, '')) like '%%pro or venture%%')",
+            (TWELVE_DATA_SEAT, QQQ_PRICE_CALLER, since),
+        ).fetchall()
+    except psycopg.Error:
+        return set()
+    found: set[str] = set()
+    for fetch_key, param_sym in rows:
+        if param_sym and str(param_sym) in wanted:
+            found.add(str(param_sym))
+        if fetch_key and "symbol:" in str(fetch_key):
+            part = str(fetch_key).split("symbol:", 1)[1].split("|", 1)[0]
+            if part in wanted:
+                found.add(part)
+    return found
+
+
+def _is_unavailable_error(error: TwelveDataApiError) -> bool:
+    msg = str(error).lower()
+    return "error 404" in msg or "data not found" in msg or "pro or venture" in msg
+
+
 @dataclass
 class RefreshOutcome:
     environment: str
@@ -123,6 +168,7 @@ class RefreshOutcome:
     planned: tuple[str, ...]
     dry_run: bool = False
     stored: list[str] = field(default_factory=list)
+    unavailable: dict[str, str] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
     stopped_by: str | None = None
     calls: int = 0
@@ -134,7 +180,7 @@ class RefreshOutcome:
             f"qqq prices in {self.environment}: {self.targets} target symbols, need {b.need} credits, "
             f"ceiling {b.ceiling} of share {b.share}, reserve {b.reserve}, spent today {b.spent_today}, "
             f"budget {b.credits}; planned {len(self.planned)} {list(self.planned)}; "
-            f"stored {len(self.stored)}, failed {len(self.failed)}, calls {self.calls}"
+            f"stored {len(self.stored)}, unavailable {len(self.unavailable)}, failed {len(self.failed)}, calls {self.calls}"
             + (" (dry run, no call)" if self.dry_run else "")
             + (f"; stopped by {self.stopped_by}" if self.stopped_by else "")
             + (f"; {self.skipped_reason}" if self.skipped_reason else "")
@@ -152,6 +198,7 @@ class RefreshOutcome:
             "budget_credits": self.budget.credits,
             "planned": ", ".join(self.planned),
             "stored": ", ".join(self.stored),
+            "unavailable": "; ".join(f"{symbol}: {error}" for symbol, error in self.unavailable.items()),
             "failed": "; ".join(f"{symbol}: {error}" for symbol, error in self.failed.items()),
             "stopped_by": self.stopped_by or "",
             "calls": self.calls,
@@ -175,7 +222,10 @@ def _fetch(
         try:
             ingest_daily_series(symbol, client=client, connection=connection, now=now)
         except TwelveDataApiError as error:
-            outcome.failed[symbol] = str(error)
+            if _is_unavailable_error(error):
+                outcome.unavailable[symbol] = str(error)
+            else:
+                outcome.failed[symbol] = str(error)
             continue
         except (TwelveDataRateLimitError, gateway.CapacityExceeded) as error:
             outcome.failed[symbol] = str(error)
@@ -209,7 +259,8 @@ def _refresh_qqq_prices(
         targets=len(symbols),
     )
     limit = budget.symbols if max_symbols is None else min(budget.symbols, max_symbols)
-    planned = tuple(refresh_order(symbols, newest_sessions(connection, symbols))[:limit])
+    unavail = recent_unavailable_symbols(connection, symbols, now=now)
+    planned = tuple(refresh_order(symbols, newest_sessions(connection, symbols), unavailable=unavail)[:limit])
     outcome = RefreshOutcome(
         environment=environment, targets=len(symbols), budget=budget, planned=planned, dry_run=dry_run
     )

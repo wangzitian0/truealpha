@@ -67,25 +67,29 @@ CONFIDENCE_REPORT_SQL = """
          matches_served_head, cutoff, created_at,
          (payload - 'cells' - 'sample') || jsonb_build_object(
            'tier_counts',
-           coalesce((
-             select jsonb_object_agg(fam_key, counts)
-             from (
-               select fam.key as fam_key,
-                 jsonb_build_object(
-                   'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= __HIGH_FROM__)),
-                   'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= __MEDIUM_FROM__ and conf_num < __HIGH_FROM__)),
-                   'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= __MEDIUM_FROM__), false))
-                 ) as counts
-               from jsonb_each(case when jsonb_typeof(latest.payload->'cells') = 'object' then latest.payload->'cells' else '{}'::jsonb end) as fam(key, value)
-               cross join lateral jsonb_each(case when jsonb_typeof(fam.value) = 'object' then fam.value else '{}'::jsonb end) as cell(key, value)
-               cross join lateral (
-                 select btrim(lower(coalesce(cell.value->>'tier', ''))) as tier_val,
-                        case when coalesce(cell.value->>'confidence', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-                             then (cell.value->>'confidence')::numeric else null end as conf_num
-               ) parsed
-               group by fam.key
-             ) t
-           ), '{}'::jsonb)
+           case
+             when jsonb_typeof(latest.payload->'tier_counts') = 'object'
+               then latest.payload->'tier_counts'
+             else coalesce((
+               select jsonb_object_agg(fam_key, counts)
+               from (
+                 select fam.key as fam_key,
+                   jsonb_build_object(
+                     'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= __HIGH_FROM__)),
+                     'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= __MEDIUM_FROM__ and conf_num < __HIGH_FROM__)),
+                     'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= __MEDIUM_FROM__), false))
+                   ) as counts
+                 from jsonb_each(case when jsonb_typeof(latest.payload->'cells') = 'object' then latest.payload->'cells' else '{}'::jsonb end) as fam(key, value)
+                 cross join lateral jsonb_each(case when jsonb_typeof(fam.value) = 'object' then fam.value else '{}'::jsonb end) as cell(key, value)
+                 cross join lateral (
+                   select btrim(lower(coalesce(cell.value->>'tier', ''))) as tier_val,
+                          case when coalesce(cell.value->>'confidence', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                               then (cell.value->>'confidence')::numeric else null end as conf_num
+                 ) parsed
+                 group by fam.key
+               ) t
+             ), '{}'::jsonb)
+           end
          ) as payload
   from latest
 """.replace("__HIGH_FROM__", str(_HIGH_CONFIDENCE_FROM)).replace("__MEDIUM_FROM__", str(_MEDIUM_CONFIDENCE_FROM))

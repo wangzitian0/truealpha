@@ -37,7 +37,9 @@ origin (`apps/data-engine/src/data_engine/datahub/capture_core/moomoo_origin.py`
 asks `request_history_kline` for a bounded daily window ending on the price cutoff —
 the last settled session (#637) — UNADJUSTED (`AuType.NONE`) and regular-session only
 (`extended_time=False`), and refuses any bar stamped with an instant or dated after the
-cutoff (#535). See `reconciliation_policies.py` (`RECONCILIATION_POLICY` = `market-price-fusion:v4`) and `confidence_report.py` for the active multi-origin fusion and continuous confidence scoring.
+cutoff (#535). See `reconciliation_policies.py` (`RECONCILIATION_POLICY` = `market-price-fusion:v4`) and `confidence_report.py` for active multi-origin fusion and continuous confidence scoring (display bands in `confidence_bands.v1.json`: `>= 0.80` high, `>= 0.60` medium).
+
+Corporate-action validation (`common/factors/src/factors/backtest/corporate_actions.py`) detects non-split price jumps using `max(|ln(step)| / 2, 0.06)` so ordinary spin-offs or ex-dividend moves under 6% do not trigger false exclusions when `step > 1`.
 
 The SDK speaks protobuf and returns DataFrames, so the landed bytes are the decoded bars
 in canonical JSON under raw/moomoo/ in object storage, and the parser identity (`moomoo-kline-parser:v1`)
