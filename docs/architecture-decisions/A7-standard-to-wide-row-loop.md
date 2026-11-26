@@ -32,7 +32,8 @@ This ADR establishes the unified, falsifiable Single Source of Truth (SSOT) for 
 ## Decision 1 — MetricStandard is the single source of truth for metric meaning
 
 A metric's meaning, acceptance criteria, evidence rules, fact plane, and extraction
-adapter are declared once in `truealpha_contracts.standards.MetricStandard`.
+adapter are declared once in `data_engine.contracts.standards.MetricStandard`
+(`apps/data-engine/src/data_engine/contracts/standards.py`).
 
 - **Zero-migration expansion**: A new standard registers in `STANDARDS` as code. It requires
   zero SQL migrations.
@@ -79,18 +80,12 @@ All external vendor and model requests pass through `data_engine.sources.gateway
 
 The following standing checks protect this architecture in CI:
 
-1. `tools/check_factor_contract.py`:
-   Asserts that public factor signatures and datahub tables match the frozen contract.
-2. `apps/data-engine/tests/test_standard_loop_is_generic.py`:
-   Drives the loop with a synthetic standard `OTHER` on an isolated plane, asserting that the
-   planner and backfill query only what the standard declares without schema migration.
-3. `apps/data-engine/tests/test_standards_lane_schedule.py`:
-   Asserts that the weekly Dagster schedule covers every registered standard in `STANDARDS`.
-4. `apps/data-engine/tests/test_source_gateway.py`:
-   Asserts that a capacity of 1 defers the second call of the day and proves rate limiting.
-5. `apps/data-engine/tests/test_standard_backfill.py`:
-   Asserts that replayed model answers query the provider zero times, and holding company
-   predecessors resolve correctly.
+1. `apps/data-engine/tests/contracts/test_standards.py`:
+   Verifies `STANDARDS` registry declarations, `EvidenceRequirement`, `FactPlane`, and confidence mappings.
+2. `apps/data-engine/tests/test_source_gateway.py`:
+   Asserts that capacity limits defer over-budget calls and proves vendor rate limiting.
+3. `apps/data-engine/tests/test_ixbrl_headcount.py`:
+   Verifies inline XBRL headcount extraction and verbatim filing provenance.
 
 ## Consequences
 

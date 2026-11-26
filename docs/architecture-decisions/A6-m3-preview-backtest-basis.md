@@ -113,7 +113,7 @@ each decision:
 
 Decision 4 also governs the live strategy inputs. The deployed tick seeds the share count and the
 captured close of its own cutoff. It puts the count on the share basis of that close with the rule
-of the projector (`datahub/share_basis.py`).
+of the projector (`apps/data-engine/src/data_engine/datahub/share_basis.py`).
 
 - The splits come from the two stored daily series of the issuer's listings. When the series cannot
   prove the splits between the count's basis date and the close's session, the tick writes no share

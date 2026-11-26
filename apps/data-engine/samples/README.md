@@ -10,8 +10,8 @@ reflect the network/IP conditions the real ingestion pipeline will see).
 
 Purpose: ground schema design and data-quality profiling for `db/migrations`
 and `common/factors` in real payloads before building the `raw.fetches` + object-storage
-ingestion pipeline (Phase -1 reconnaissance; see `init.md` "Current Baseline and Next Gate"). Not refreshed by CI;
-re-run the scripts in `../scripts/` manually to recapture a new snapshot.
+ingestion pipeline (Phase -1 reconnaissance). Not refreshed by CI;
+re-run scripts in `apps/data-engine/scripts/` manually when recapturing snapshots.
 
 Initial universe: DDOG, NICE, SHOP, DUOL (the reconnaissance test universe) +
 QQQ and ARKK (ETF holdings-weight source check).
@@ -31,8 +31,7 @@ three-year files therefore remain immutable point-in-time vintages.
 
 Sampling and the executable composite replay now satisfy
 the local-backtest boundary. Five-year coverage and primary/fallback price
-reconciliation remain strategy-evaluation requirements. See
-`docs/strategy-data-quality.md` for the gate definitions.
+reconciliation remain strategy-evaluation requirements.
 
 The first continuous-confidence sensitivity report is documented in
 `docs/confidence-calibration.md`. Its four-symbol Yahoo/Twelve Data comparison is
@@ -50,7 +49,7 @@ confidence threshold.
 - `prices/` — immutable 1y/3y/5y daily OHLCV captures (`data_engine.sources.yahoo`, Yahoo chart endpoint)
 - `events/` — normalized issuer statements plus raw Yahoo corporate-action responses
 - `golden/` — human-reviewed expected semantic records tied to raw artifact hashes
-- `moomoo/` — one JSON per ticker (`data_engine/scripts/capture_fundamental_samples.py`), captured
+- `moomoo/` — one JSON per ticker (captured by a retired reconnaissance script), captured
   2026-07-10 once OpenD login was fixed (see git log). 14 endpoints per ticker: company
   profile, financials (income/balance-sheet/cash-flow/key-metrics), revenue breakdown,
   valuation trend, analyst consensus + rating summary, Morningstar report, shareholders
@@ -64,9 +63,9 @@ endpoint** (a real Phase -1 finding — Yahoo appears to fingerprint at the
 session/TLS level, not just check the User-Agent string). Worked around by
 dropping the package and hitting Yahoo's chart endpoint directly with a plain
 `httpx` client and a non-default `User-Agent`
-(`data_engine/sources/yahoo.py`) — the same approach finance_report runs in
+(`apps/data-engine/src/data_engine/sources/yahoo.py`) — the same approach `wangzitian0/finance_report` runs in
 production from this same VPS
-(`apps/backend/src/pricing/extension/market_data/_providers.py` in that repo).
+(`finance_report: apps/backend/src/pricing/extension/market_data/_providers.py`).
 Verified working end-to-end for all 4 tickers.
 
 ## Profiling findings from this snapshot (see `git log` for the exact pull)
@@ -81,7 +80,7 @@ Verified working end-to-end for all 4 tickers.
 - **`EntityNumberOfEmployees` XBRL tag is absent for all 4 issuers** — headcount
   is not machine-readable via XBRL for this universe; module 2's
   gross-profit-per-employee factor must go through the LLM-extraction path
-  (`common/factors/shared/extraction.py`) reading `filings/*.html`, not staging
+  (`common/factors/src/factors/shared/extraction.py`) reading `filings/*.html`, not staging
   data pulled straight from company-facts.
 - **Headcount is genuinely ambiguous even in prose**: DDOG's 10-K states 3,600
   (sales & marketing), 3,900 (R&D), and 8,100 (total) employees in three
@@ -134,8 +133,7 @@ Verified working end-to-end for all 4 tickers.
   assets — byte-equal for DDOG, DUOL, NICE and SHOP across FY2023–FY2025 except the
   net-income definition gap. `date_time` is midnight Asia/Shanghai on the period-end date,
   so `date_time_str` (its UTC rendering) is the day BEFORE the SEC `period_end`. Both facts
-  are standing checks in `tests/capture_core/test_moomoo_origin.py`, which byte-pins
-  these sample files, and they drive the `moomoo-financials:v1` origin.
+  drove the `moomoo-financials:v1` origin and remain retained in these sample fixtures.
 - **Morningstar coverage exists for all 4 tickers** (star ratings 2–5), but
   `economic_moat_label` came back empty for all 4 despite the star rating being
   populated — coverage is per-field, not all-or-nothing even within one endpoint response.
@@ -143,7 +141,7 @@ Verified working end-to-end for all 4 tickers.
   graph** (checked via the proto definitions, not called): nodes are named industry
   segments with an optional `plateId` (sector), not stock codes. It does not give
   "DDOG's suppliers are AWS/GCP/Azure" directly — the LLM-extraction path
-  (`common/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
+  (`common/factors/src/factors/shared/extraction.py`) is still the way to build `supplies_to` edges,
   not a shortcut moomoo replaces.
 - **The earnings calendar has no annual EPS estimate (2026-11-24, #1791).** Two stored staging
   answers of `get_earnings_calendar` (US), fetched 2026-11-24 through
@@ -162,7 +160,7 @@ Verified working end-to-end for all 4 tickers.
   release at 14:30 UTC, after the fetch at 07:12:48 UTC: an actual value can precede the release.
   The SDK table of this call keeps one EPS pair and drops `periodType` and `currency`, so the
   wrapper reads the vendor proto. The list uses the default `Hot` sort and has no paging field;
-  its completeness is not checked. `tests/test_moomoo_earnings_calendar.py` byte-pins both files.
+  its completeness is not checked; both sample files are retained as immutable fixtures.
 - Ledger-recorded calls this capture run: 57 (the `api_call_ledger` is throttle and
   audit infrastructure, not a monthly quota).
 

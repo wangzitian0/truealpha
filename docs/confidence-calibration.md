@@ -15,7 +15,7 @@ on discrete extractor priors so one formula scores both report cells and materia
 DTOs live in `common/contracts/src/truealpha_contracts/confidence.py`.
 The display band of a confidence is `confidence_band`
 (`common/contracts/src/truealpha_contracts/confidence_bands.py`); its two thresholds
-are in `data/confidence_bands.v1.json`.
+are in `common/contracts/src/truealpha_contracts/data/confidence_bands.v1.json`.
 
 Policy identity:
 `confidence-policy:e9493164ba66f91969e54a3b7c82d83e266aa0c55413110b4f2767328e0ef0a5`.
