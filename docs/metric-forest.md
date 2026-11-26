@@ -230,7 +230,7 @@ The decomposition tree (step E) follows the 2026-09-08 proposal on #528:
 The strategy ranks a FINANCIAL issuer on `gppe_banking_tce_v1`. It ranks every other class on
 `gppe_uniform_charge_v0`. The definition pins one tree per issuer class: `labor_efficiency_tree_keys`
 holds the tree key, the tree version and the tree content hash (strategy definition 1.1.0, #1518).
-`factors.forest.bound_tree` returns the pinned tree and raises when the pin differs from the
+`factors.panel.bound_tree` returns the pinned tree and raises when the pin differs from the
 registered tree. The core and the composite evaluate that pin. The bank capital base is measured
 tangible common equity (owner decision D2, 2026-10-26). An issuer with no class is excluded with
 `missing_issuer_class`. The frozen #21 replay of definition 1.0.0 passes `uniform_tree_pins()` by name.
@@ -283,8 +283,7 @@ same situation headcount was in.
 | `localcontext(prec=34, ROUND_HALF_EVEN)` | `tree.decimal_precision = 34`, `rounding = ROUND_HALF_EVEN` |
 | the required inputs per branch, and their `missing_*` reasons | `required_inputs(tree, class)`: each input names its `snapshot_field` alias, and the reason is `missing_<field>` |
 
-In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
-`common/factors/tests/test_panel.py`, show that nothing moves:
+Historically (#909, before #1610 moved evaluation into `common/factors/src/factors/panel.py`), `compute_topt_gppe` evaluated the tree with regression checks verifying:
 
 1. The tree equals the former kernel, kept verbatim in the test. The comparison uses the
    value and the string representation (exponent included), over a grid that crosses each
@@ -337,7 +336,7 @@ strategy path, so it is its own versioned step (H).
 | `may-be-negative` | arithmetic, meaning nothing by itself | holds silently | accepts |
 | no policy for the row's class | any value is unvouched | fails | refuses |
 
-In #909, both checks are generated from the forest. `factors.forest.PUBLISHED_COLUMNS` ties each
+Both checks derive from the registered metric definitions. `truealpha_contracts.metrics.PUBLISHED_COLUMNS` ties each
 published mart column to its node, and there is no second list of what a negative number
 means. The suite also asserts two things the tree implies:
 
@@ -353,8 +352,8 @@ it is printed by name on every tick and every nightly run. #909 therefore remove
 entry from `tools/output_invariant_exemptions.json`, which today still defers <!-- doc-drift: history -->
 `gppe-not-negative` until 2026-09-23.
 
-Red-proofs that #909 adds, all against a real materialized governed head
-(`apps/data-engine/tests/capture_core/test_node_sign_invariant.py`):
+Red-proofs that #909 added against a real materialized governed head
+(now covered by `common/runtime/tests/test_output_invariants.py`):
 
 - the same JPM row fails under a forest whose GPPE node forbids a negative financial value;
 - a sign flip between `gppe` and `capital_adjusted_gross_profit` fails, and so does a published
@@ -387,7 +386,7 @@ winsorization and class-specific adjustments are expressed as declared, versione
 (parameters, per-class bindings) and node policies in this forest — never as a change to the
 captured fact, which stays available for every other consumer.
 
-In the registry this is `factors.forest.registry.PHYSICALLY_NON_NEGATIVE`: `must-be-non-negative`
+In the registry this is `truealpha_contracts.metrics.PHYSICALLY_NON_NEGATIVE`: `must-be-non-negative`
 is reserved for the quantities listed there, each with the reason it cannot be negative, and
 `test_must_be_non_negative_is_reserved_for_physical_quantities` fails when any other node forbids
 a negative value. Every new node (MVA, SBC, labor cost, marketing cost, …) is therefore
@@ -489,9 +488,9 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 | step | scope | acceptance (standing) |
 |---|---|---|
 | **A** | This document | review |
-| **B** | Proposed in #909: `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` switched to evaluate it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries (forest/gppe-tree-reproduces-v020, invariants/a-declared-signal-is-printed) | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
+| **B** | Proposed in #909 (later superseded by `common/factors/src/factors/panel.py` in #1610): registry types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` switched to evaluate it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries (forest/gppe-tree-reproduces-v020, invariants/a-declared-signal-is-printed) | golden result ids and frozen tree identity; DB sign-invariant checks (`common/runtime/tests/test_output_invariants.py`) <!-- doc-drift: history --> |
 | C | Inputs of the decomposition: `financial_assets` and `financial_returns` (with basis) as `METRICS` entries and `MetricStandard`s. The SEC adapter captures them with vintage and basis. Confidence families. No factor change. | a planner and adapter test on fixtures, and a coverage row per standard (#733) |
-| D | `mart.metric_node_values` (one migration) and its writer from `evaluate()` for every registered tree; the three status dimensions per cell; the pivot reader and `FOREST.columns()`; `PUBLISHED_COLUMNS` generated; input keys and coverage from the forest | a synthetic node adds no migration (`check_factor_contract.py`); the pivot equals the fixed columns on the governed head |
+| D | `mart.metric_node_values` (one migration) and its writer from `evaluate()` for every registered tree; the three status dimensions per cell; the pivot reader and `FOREST.columns()`; `PUBLISHED_COLUMNS` generated; input keys and coverage from the forest | synthetic-node migration-free registry check; the pivot equals the fixed columns on the governed head |
 | E | Tree `labor_efficiency.operating_financial @ v1`: the operating and financial components for every issuer, with class bindings reviewed under #71 and a new `gppe-definition` id carrying the tree sha; golden decisions re-baselined once | #528 criteria (1)–(4): four issuer classes; both components on the row; a pre-change cutoff replays byte-identically under v0.2.0; per-component sign policy red-proven |
 | F | Module 7 reads the operating component (M1 A5); versioned strategy policy | tier test per class; replay |
 | G | Trees `value_creation.mva`, `labor_efficiency.labor_cost` and `cost_structure`, with their input standards (SBC, labor, marketing, equity, debt, cash) through the #735 loop | coverage probe per standard; each tree's golden cases |

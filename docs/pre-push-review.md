@@ -31,22 +31,17 @@ Read the full diff once per category. Every entry names the PR where it bit.
   the pattern in `\Q…\E` (quotemeta — perl-only, sed has no equivalent) and
   match the shortest distinctive literal instead of the whole line.
 
-## 1b. Merging before the review exists (1, and it shipped)
+## 1b. Historical note: merge timing and stale review workflows
 
-`gh pr merge` when `mergeStateStatus == CLEAN` and unresolved threads == 0 is
-NOT evidence of a clean review — AGENTS.md rule 4 says so explicitly, and #714
-proved it: merged at 04:31:32, Copilot's review arrived at 04:32:11. Thirty-nine
-seconds. One of the three findings in it was that
-`working-directory: apps/app-web` made a bare `tools/warm_surface.sh` resolve
-inside `apps/app-web`; `Deploy staging v0.0.38` died with exit 127 and
-another lane spent a PR fixing it (#717).
+In an earlier workflow (#714), `gh pr merge` raced ahead of an unsubmitted Copilot
+review by 39 seconds; one finding noted that `working-directory: apps/app-web`
+resolved a relative `warm_surface.sh` script inside `apps/app-web` instead of the repo
+root, breaking `Deploy staging v0.0.38` (#717).
 
-Before merging, require that a review has been SUBMITTED for the current head,
-not merely that no thread is open. Zero threads on a PR nobody has reviewed
-looks identical to zero threads on a clean one. Mechanised as
-`python -m tools.pr_merge_gate <pr> --policy either --merge` (from infra2) — it exits non-zero until a review whose
-`commit_id` IS the current head exists. Run it INSTEAD of eyeballing
-`mergeStateStatus`; that is the check both incidents passed.
+Under current repository rules (`AGENTS.md` Rule 4 and ADR A8), third-party and AI
+review feedback is advisory and never blocks PR readiness. Do not rely on the retired
+`tools.pr_merge_gate` tool; inspect submitted review threads on the current head SHA
+and verify CI checks directly before merging.
 
 ### What was measured, and what was dropped
 

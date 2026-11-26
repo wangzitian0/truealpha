@@ -12,7 +12,7 @@ architecture; it is the authoritative document) → [`AGENTS.md`](AGENTS.md) (wo
 ```
 apps/data-engine    Python  ingestion into immutable raw objects + Postgres lineage/staging
 apps/llm-service    Python  FastAPI: MCP endpoint (priority) + /chat (Tier 3)
-apps/app-web        TS/Bun  Next.js — reads mart via the mart_readonly role, no API hop
+apps/app-web        TS/Bun  Next.js — zero-DB frontend calling FastAPI /api/v1/*
 common/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
 common/factors        Python  the ONLY place computation logic lives (base / composite / shared)
 common/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes
@@ -37,25 +37,19 @@ row-complete, versioned [data-quality report](docs/datahub-quality-report.md). T
 report preserves missing and conflicted requested cells in its denominator and is the
 machine-readable input to later mart/dashboard presentation.
 
-Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh). The local stack also requires Docker.
+Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh). The local stack uses Podman (or a Docker-compatible runtime).
 
-## DataHub Demand
-
-Factors, strategies, and research modules request a long-lived data service through a
-content-addressed, source-neutral demand with a representative sample. See
-[`docs/datahub-service-demand.md`](docs/datahub-service-demand.md) for the contract,
-TOPT example, quality objectives, and the boundary with confidence calibration and
-`infra2-sdk`.
+## DataHub Confidence
 
 The continuous-confidence formula and its sensitivity table are documented in
 [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
 Its DTOs live in `common/contracts`.
 
-### Production TOPT orchestration
+### Scheduled orchestration
 
-Dagster (`apps/data-engine/src/data_engine/dagster_defs.py`) is the single orchestration authority for Production TOPT runs.
-The scheduled job (`topt_live_pipeline`, driven by `topt_live_schedule`) and the manual trigger sensor (`pipeline_trigger_sensor`) execute capture, core materialization, plausibility checks, and pointer advancement.
-Downstream consumers read the governed head through `mart.served_head` and `mart_readonly`.
+Dagster (`apps/data-engine/src/data_engine/dagster_defs.py`) is the single orchestration authority for scheduled runs across all active universes declared in `common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`.
+Scheduled jobs and manual trigger sensors execute capture, core materialization, plausibility checks, and pointer advancement.
+Downstream consumers read the governed head through `apps/llm-service`, which queries `mart.served_head` with `mart_readonly`.
 
 ## Deployment
 

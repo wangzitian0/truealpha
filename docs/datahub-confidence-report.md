@@ -13,8 +13,9 @@ keeps its band words.
 (metric family, subject) cell of the run a governed pointer heads, aggregates per family and
 per universe, samples the subjects of the universe record across every origin, cross-checks the
 accuracy, and appends one content-addressed row to `mart.datahub_confidence_report`. The Dagster job
-`datahub_confidence_report` (`lanes/quality.py`) runs it nightly at 00:45 UTC — after
-`output_invariants_check` (00:15) — once per lane universe (`universe-list:qqq`, `topt`),
+`datahub_confidence_report` (`apps/data-engine/src/data_engine/lanes/quality.py`) runs nightly after
+`output_invariants_check` (see `apps/data-engine/src/data_engine/lanes/quality.py` for cron schedules) across `scheduled_universe_names()`
+declared in `common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`,
 and can be launched by name with an explicit `executed_at`. `/admin/datahub` renders the
 newest report per universe.
 
@@ -54,7 +55,7 @@ headcount plane's two producers (`10k-extraction`, `manual-review`) both read th
 market cap (`price * shares_outstanding`), headcount extraction, segment revenue extraction, theme
 purity (`min` across partition segments), supply-chain exposure (`min` across edges >= `0.40`),
 and analyst track-record cells now pass through `single_origin_confidence` /
-`calibrated_confidence_for` (`data_engine/datahub/_helpers.py`), backing `mart.metric_node_values`
+`calibrated_confidence_for` (`apps/data-engine/src/data_engine/datahub/_helpers.py`), backing `mart.metric_node_values`
 with the continuous calibration formula while keeping `confidence_report.py` for cross-origin
 agreement grading.
 
@@ -62,9 +63,9 @@ agreement grading.
 
 | family | semantic | origins today | policy |
 |---|---|---|---|
-| `open`, `high`, `low`, `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `RECONCILIATION_POLICY` (`reconciliation_policies.py`), unit USD, served-day narrowing; one family per bar field (#865) |
-| `volume` | market-price | the same origins | `VOLUME_RECONCILIATION_POLICY` (`reconciliation_policies.py`), unit shares, served-day narrowing |
-| `revenue`, `gross_profit`, `net_income`, `total_assets` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | `FINANCIAL_FACT_RECONCILIATION_POLICY` (`reconciliation_policies.py`), aligned on the primary's fiscal period end in the primary's currency (#866) |
+| `open`, `high`, `low`, `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `RECONCILIATION_POLICY` (`common/runtime/src/truealpha_runtime/reconciliation_policies.py`), unit USD, served-day narrowing; one family per bar field (#865) |
+| `volume` | market-price | the same origins | `VOLUME_RECONCILIATION_POLICY` (`common/runtime/src/truealpha_runtime/reconciliation_policies.py`), unit shares, served-day narrowing |
+| `revenue`, `gross_profit`, `net_income`, `total_assets` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | `FINANCIAL_FACT_RECONCILIATION_POLICY` (`common/runtime/src/truealpha_runtime/reconciliation_policies.py`), aligned on the primary's fiscal period end in the primary's currency (#866) |
 | `pre_provision_profit`, `shares_outstanding` | financial-fact | `origin:sec-company-facts:v1` | none — a single origin gives `single_origin`, two lineages give `no_agreement_policy` |
 | `headcount` | financial-fact | `origin:headcount:<producer>` per producer in `staging.issuer_headcount_facts` | none — one lineage gives `same_lineage` |
 | `index_membership` | index-membership plane (QQQ) | `origin:nasdaq-index:v1` (`staging.etf_constituent_facts`), `origin:nport:v1` (`mart.fund_holdings_resolved`) | `index-membership-fusion:v1` (new), presence compared exactly |

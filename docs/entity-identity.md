@@ -77,7 +77,7 @@ fund is an issuer.
 Only `issues`, `listed_as`, `primary_listing` and the three identity edges have a writer. The others
 are registered so that their shape is fixed before anything writes them.
 
-`choose_primary_listings` (`datahub/primary_listing.py`) is the one reader of `primary_listing`. An issuer with
+`choose_primary_listings` (`apps/data-engine/src/data_engine/datahub/primary_listing.py`) is the one reader of `primary_listing`. An issuer with
 several listings and no row has no primary listing. Its engine marks it unavailable with the reason
 `primary_listing_undeclared`. Both mart views read the same relation.
 
@@ -311,7 +311,7 @@ the oldest entity that holds `issues` to that instrument is its issuer.
     `legacy-id` resolution.
 - **Consumers that parse id prefixes today** switch to alias lookups in PR-4:
   - `sec_financial_adapter` (CIK, predecessor lookup);
-  - `standards/planner.py`;
+  - `apps/data-engine/src/data_engine/datahub/standards/planner.py`;
   - `confidence_report._CIK_ID`;
   - `theme_purity`;
   - `holdings_enrichment`, which also writes aliases directly from PR-5 on.
@@ -560,16 +560,7 @@ holding type.
 
 | check | where it lives |
 |---|---|
-| All four issuer forms of AAPL (legacy LEI id, legacy CIK id, `lei`, `cik`) resolve to one UUID; all five instrument forms resolve to one UUID; GOOG and GOOGL are two instruments under one issuer; unlinked TOPT ids report why | `apps/data-engine/tests/test_entity_identity_store.py` |
-| A second backfill writes nothing | same file |
-| A later proof merges by adding edges, and every existing alias row is unchanged; the survivor is the id a store that knew the link from the start mints; "as known before", the ids still resolve apart | same file |
-| A reassigned symbol resolves by valid date and by what was known; overlapping claimants are refused | same file |
-| A listing's retracted earlier line does not block the backfill's new `listed_as` edge; a line still open does | same file |
-| Every store table refuses UPDATE and DELETE; schemes, kinds and relation domains are enforced; an entity without a birth alias cannot commit | same file |
-| The plan SELECT references no object either migration creates, so it can be dry-run before deploy | same file |
-| The same evidence in two fresh databases mints identical entities and relations; every id equals Python's `uuid5` of its birth alias; a database that learned the crosswalk one run later resolves every legacy id to the same UUIDs | same file (builds and drops its own databases) |
-| Entity and relation ids that are not derived from their claim are refused | same file |
-| The migrations re-apply over their own rows | `ci-db.yml` (three passes) |
-| No boot migration reads or writes data for the store, and none calls the backfill | `test_entity_identity_store.py` |
-| The job fills the store once, reports its counts and duration, and a second run writes nothing; the sensor launches for an empty store or new evidence and is quiet otherwise | same file |
-| Every `mart` table with `run_id` and `issuer_id` stores the wide row's issuer id for one real captured head; unvisited placeholder rows (`lane:unvisited:v1`) are eliminated from Q3, Q4, and Q6 under SSOT (#1223), leaving missing rows as honest `no_row` / missing metrics; members without entities get no row; readers and boards query real partitioned rows only; ids resolve as of the head's own report date (#1079) | `apps/data-engine/tests/test_canonical_issuer_id.py` |
+| Coordinate resolution (`resolve_coordinates`) resolves legacy IDs and mints deterministic entity UUIDs on misses | `apps/data-engine/tests/datahub/test_resolve_coordinates.py` |
+| `mart.entity_identity` set-based pass matches legacy helper outputs and keeps `entity_id::text` index coverage | `common/runtime/tests/test_entity_identity_view.py`, `common/runtime/tests/test_entity_identity_text_index.py` |
+| Migration chain re-applies cleanly without boot-time lock issues | `common/runtime/tests/test_migration_chain.py` |
+| All registered MCP tools resolve UUID identity fields instead of leaking raw UUIDs | `apps/llm-service/tests/test_mcp_identity_leak.py` |
