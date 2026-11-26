@@ -417,12 +417,12 @@ def invoke(
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     resolved_cik = cik if cik is not None and cik > 0 else None
     resolved_key = subject_key or (accession if resolved_cik is None else None)
-    if resolved_cik is None and not resolved_key:
-        raise ValueError("either positive cik or subject_key/accession must be provided")
     model = settings.llm_small_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
     active_conn = connection if persist and connection is not None else None
+    if active_conn is not None and resolved_cik is None and not resolved_key:
+        raise ValueError("either positive cik or subject_key/accession must be provided when persist=True")
     tx_ctx = (
         active_conn.transaction()
         if active_conn is not None and getattr(active_conn, "autocommit", False)
