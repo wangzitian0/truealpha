@@ -14,8 +14,9 @@ name: main-health
 # means "main HEAD's ci-required is red NOW". With #883's sha-keyed groups main
 # runs no longer cancel each other, so every main commit reports its own
 # conclusion (before it, a superseded run concludes `cancelled` and is ignored
-# here). Known limit: a path-filtered green (a docs-only commit skips the python
-# lane) closes the issue too.
+# here). Each failure records its top-level failed lanes (`failed-lanes: ...`),
+# and a green run resolves the incident only when every recorded failed lane
+# actually ran and passed on that run.
 #
 # workflow_run executes THIS file from the default branch with a write token,
 # so nothing from the triggering run is ever interpolated into a `run:` — the
@@ -57,22 +58,39 @@ jobs:
       RUN_ID: ${{ github.event.workflow_run.id }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
     steps:
-      - name: File the red-main issue
+      - name: Open or update the red-main issue
         if: github.event.workflow_run.conclusion == 'failure'
         run: |
           set -euo pipefail
           COMMIT_TITLE="${COMMIT_MESSAGE%%$'\n'*}"
-          FAILED_JOBS="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
-            --jq '.jobs[] | select(.conclusion == "failure") | "- " + .name' || echo "- (could not list the jobs; open the run)")"
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > run_jobs.json || echo '{"jobs":[]}' > run_jobs.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          jobs = json.loads(Path("run_jobs.json").read_text(encoding="utf-8")).get("jobs", [])
+          failed = [j for j in jobs if j.get("conclusion") == "failure" and j.get("name")]
+          lanes = {str(j["name"]).split(" / ", 1)[0].strip() for j in failed}
+          non_agg = {lane for lane in lanes if lane != "ci-required"}
+          if non_agg:
+              lanes = non_agg
+          if not lanes:
+              lanes = {"unknown"}
+          failed_lines = [f"- {j['name']}" for j in failed] or ["- (could not list the jobs; open the run)"]
+          Path("failed_lanes.txt").write_text(", ".join(sorted(lanes)), encoding="utf-8")
+          Path("failed_jobs.txt").write_text("\n".join(failed_lines), encoding="utf-8")
+          PY
+          FAILED_LANES="$(cat failed_lanes.txt)"
           {
             echo "ci-required failed on a push to main."
             echo
             echo "- commit: $HEAD_SHA"
             echo "- title: $COMMIT_TITLE"
             echo "- run: $RUN_URL"
+            echo "failed-lanes: $FAILED_LANES"
             echo
             echo "Failed jobs:"
-            echo "$FAILED_JOBS"
+            cat failed_jobs.txt
           } > body.md
           EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$ESCALATION_TITLE in:title" --json number,title --jq ".[] | select(.title == \"$ESCALATION_TITLE\") | .number" | head -n1 || true)
           if [ -n "$EXISTING" ]; then
@@ -89,10 +107,54 @@ jobs:
           if [ -z "$EXISTING" ]; then
             exit 0
           fi
-          CORE_RAN="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
-            --jq '[.jobs[] | select((.name | test("^(python|web|db)($| / )")) and .conclusion == "success")] | any' || echo false)"
-          if [ "$CORE_RAN" != "true" ]; then
-            echo "Core code lanes were skipped on $HEAD_SHA; keeping open incident #$EXISTING."
+          gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body,comments > issue.json
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > run_jobs.json
+          if ! python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          issue = json.loads(Path("issue.json").read_text(encoding="utf-8"))
+          jobs = json.loads(Path("run_jobs.json").read_text(encoding="utf-8")).get("jobs", [])
+
+          texts = [issue.get("body") or ""] + [
+              c.get("body") or "" for c in (issue.get("comments") or [])
+          ]
+          required_lanes: set[str] = set()
+          for text in texts:
+              for line in text.splitlines():
+                  match = re.match(r"^\s*(?:-\s*)?failed-lanes:\s*(.+)$", line, re.IGNORECASE)
+                  if match:
+                      for part in match.group(1).split(","):
+                          lane = part.strip()
+                          if lane:
+                              required_lanes.add(lane)
+
+          def lane_succeeded(lane: str) -> bool:
+              lane_jobs = [
+                  j
+                  for j in jobs
+                  if j.get("name") == lane or str(j.get("name") or "").startswith(f"{lane} / ")
+              ]
+              return bool(
+                  lane_jobs
+                  and any(j.get("conclusion") == "success" for j in lane_jobs)
+                  and all(j.get("conclusion") in ("success", "skipped") for j in lane_jobs)
+              )
+
+          if not required_lanes:
+              if not any(lane_succeeded(lane) for lane in ("python", "web", "db")):
+                  print("Core code lanes did not pass on current run; keeping incident open.")
+                  raise SystemExit(1)
+              raise SystemExit(0)
+
+          missing = [lane for lane in sorted(required_lanes) if not lane_succeeded(lane)]
+          if missing:
+              print("Unverified failed lanes on current run:", ", ".join(missing))
+              raise SystemExit(1)
+          PY
+          then
+            echo "Keeping open incident #$EXISTING on $HEAD_SHA until all recorded failed lanes pass."
             exit 0
           fi
           COMMIT_TITLE="${COMMIT_MESSAGE%%$'\n'*}"
