@@ -432,6 +432,24 @@
       "sensitive": false,
       "source": "code",
       "store_key": ""
+    },
+    {
+      "aliases": [],
+      "ci": "forbidden",
+      "composed_from": "",
+      "description": "External reverse-proxy path prefix mounted in front of backend endpoints (Q09)",
+      "empty_ok": false,
+      "env": "ROUTED_PREFIX",
+      "field": "routed_prefix",
+      "group": "runtime",
+      "has_default": true,
+      "injected": false,
+      "provided_by": "",
+      "required": false,
+      "scope": "env",
+      "sensitive": false,
+      "source": "code",
+      "store_key": ""
     }
   ],
   "source": "apps/llm-service"

@@ -18,7 +18,11 @@ from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.oracle_outcomes import load_oracle_outcomes_rollup, record_oracle_outcomes_safely
 from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
-from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
+from data_engine.environment_universes import (
+    any_environment_universe_names,
+    contract_schedule_status,
+    scheduled_universe_names,
+)
 from data_engine.external_op import external_op
 from data_engine.lanes.capture import TICKS
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
@@ -253,13 +257,19 @@ def output_invariants_job() -> None:
     run_report_surface_proof()
 
 
-def _tick_schedule(name: str, job: dg.JobDefinition, cron_schedule: str) -> dg.ScheduleDefinition:
+def _tick_schedule(
+    name: str,
+    job: dg.JobDefinition,
+    cron_schedule: str,
+    *,
+    environment: str = settings.environment,
+) -> dg.ScheduleDefinition:
     @dg.schedule(
         name=name,
         job=job,
         cron_schedule=cron_schedule,
         execution_timezone="UTC",
-        default_status=dg.DefaultScheduleStatus.RUNNING,
+        default_status=contract_schedule_status(environment),
     )
     def _schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
         tick = context.scheduled_execution_time.isoformat()
@@ -354,21 +364,30 @@ def datahub_confidence_report_job() -> None:
     run_confidence_report()
 
 
-@dg.schedule(
-    job=datahub_confidence_report_job,
-    cron_schedule=CONFIDENCE_REPORT_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
-    t = context.scheduled_execution_time.isoformat()
-    return [
-        dg.RunRequest(
-            run_key=f"{t}:{u}",
-            run_config=dg.RunConfig(ops={"run_confidence_report": ConfidenceReportConfig(executed_at=t, universe=u)}),
-        )
-        for u in scheduled_universe_names()
-    ]
+def _build_confidence_report_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name="datahub_confidence_report_schedule",
+        job=datahub_confidence_report_job,
+        cron_schedule=CONFIDENCE_REPORT_CRON,
+        execution_timezone="UTC",
+        default_status=contract_schedule_status(environment),
+    )
+    def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
+        t = context.scheduled_execution_time.isoformat()
+        return [
+            dg.RunRequest(
+                run_key=f"{t}:{u}",
+                run_config=dg.RunConfig(
+                    ops={"run_confidence_report": ConfidenceReportConfig(executed_at=t, universe=u)}
+                ),
+            )
+            for u in scheduled_universe_names(environment)
+        ]
+
+    return datahub_confidence_report_schedule
+
+
+datahub_confidence_report_schedule = _build_confidence_report_schedule(settings.environment)
 
 
 @external_op
@@ -392,7 +411,12 @@ def model_key_health_job() -> None:
 
 
 def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
-    return _tick_schedule("model_key_health_schedule", model_key_health_job, model_key_health_cron(environment))
+    return _tick_schedule(
+        "model_key_health_schedule",
+        model_key_health_job,
+        model_key_health_cron(environment),
+        environment=environment,
+    )
 
 
 model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
@@ -524,20 +548,49 @@ def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
     yield dg.RunRequest(run_key=state_key, tags={TICK_TAG: tick})
 
 
-defs = dg.Definitions(
-    jobs=[
-        output_invariants_job,
-        datahub_confidence_report_job,
-        model_key_health_job,
-        job_run_health_job,
-        topt_baseline_job,
-    ],
-    schedules=[
-        output_invariants_schedule,
-        datahub_confidence_report_schedule,
-        model_key_health_schedule,
-        job_run_health_schedule,
-        topt_baseline_schedule,
-    ],
-    sensors=[output_invariants_on_advance_sensor],
-)
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    if environment == settings.environment:
+        schedules = [
+            output_invariants_schedule,
+            datahub_confidence_report_schedule,
+            model_key_health_schedule,
+            job_run_health_schedule,
+            topt_baseline_schedule,
+        ]
+    else:
+        schedules = [
+            _tick_schedule(
+                "output_invariants_schedule",
+                output_invariants_job,
+                OUTPUT_INVARIANTS_CRON,
+                environment=environment,
+            ),
+            _build_confidence_report_schedule(environment),
+            build_model_key_health_schedule(environment),
+            _tick_schedule(
+                "job_run_health_schedule",
+                job_run_health_job,
+                JOB_RUN_HEALTH_CRON,
+                environment=environment,
+            ),
+            _tick_schedule(
+                "topt_baseline_schedule",
+                topt_baseline_job,
+                TOPT_BASELINE_CRON,
+                environment=environment,
+            ),
+        ]
+    return dg.Definitions(
+        jobs=[
+            output_invariants_job,
+            datahub_confidence_report_job,
+            model_key_health_job,
+            job_run_health_job,
+            topt_baseline_job,
+        ],
+        schedules=schedules,
+        sensors=[output_invariants_on_advance_sensor],
+    )
+
+
+defs = build_definitions()

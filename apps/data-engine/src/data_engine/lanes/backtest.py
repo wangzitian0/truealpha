@@ -3,7 +3,6 @@
 import json
 
 import dagster as dg
-from infra2_sdk.config import EnvironmentTier, resolve_tier
 from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
 )
@@ -14,12 +13,12 @@ from truealpha_contracts.strategy import (
 from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.backtest import BacktestPending, run_core_strategy_backtest
+from data_engine.environment_universes import contract_schedule_status
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_from_config, tick_of, verdict
 
 BACKTEST_JOB_NAME = "nightly_backtest_pipeline"
 BACKTEST_CRON = "45 21 * * 1-5"
-_SCHEDULED_TIERS = frozenset({EnvironmentTier.STAGING, EnvironmentTier.PRODUCTION})
 
 NIGHTLY_BACKTEST_VERDICT = "nightly_backtest"
 NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
@@ -52,11 +51,7 @@ def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, obj
 
 
 def schedule_status(environment: str) -> dg.DefaultScheduleStatus:
-    try:
-        scheduled = resolve_tier(environment) in _SCHEDULED_TIERS
-    except ValueError:
-        scheduled = False
-    return dg.DefaultScheduleStatus.RUNNING if scheduled else dg.DefaultScheduleStatus.STOPPED
+    return contract_schedule_status(environment)
 
 
 @external_op
@@ -97,19 +92,31 @@ def nightly_backtest_pipeline_job() -> None:
     run_nightly_backtest_op()
 
 
-@dg.schedule(
-    job=nightly_backtest_pipeline_job,
-    cron_schedule=BACKTEST_CRON,
-    execution_timezone="UTC",
-    default_status=schedule_status(settings.environment),
-)
-def nightly_backtest_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(
-        run_key=tick,
-        tags={TICK_TAG: tick},
-        run_config={"ops": {"run_nightly_backtest_op": {"config": {"executed_at": tick}}}},
+def _build_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name="nightly_backtest_schedule",
+        job=nightly_backtest_pipeline_job,
+        cron_schedule=BACKTEST_CRON,
+        execution_timezone="UTC",
+        default_status=schedule_status(environment),
     )
+    def nightly_backtest_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tick = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(
+            run_key=tick,
+            tags={TICK_TAG: tick},
+            run_config={"ops": {"run_nightly_backtest_op": {"config": {"executed_at": tick}}}},
+        )
+
+    return nightly_backtest_schedule
 
 
-defs = dg.Definitions(jobs=[nightly_backtest_pipeline_job], schedules=[nightly_backtest_schedule])
+nightly_backtest_schedule = _build_schedule(settings.environment)
+
+
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    sched = nightly_backtest_schedule if environment == settings.environment else _build_schedule(environment)
+    return dg.Definitions(jobs=[nightly_backtest_pipeline_job], schedules=[sched])
+
+
+defs = build_definitions()

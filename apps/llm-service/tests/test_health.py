@@ -759,6 +759,10 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
         assert answer.headers.get("location") == f"{ROUTED_PREFIX}/mcp/", (
             f"{method} redirects to {answer.headers.get('location')!r}, not {ROUTED_PREFIX}/mcp/"
         )
+    monkeypatch.setattr(main.settings, "routed_prefix", "/custom-gw")
+    custom_redirect = client.get("/mcp", follow_redirects=False)
+    assert custom_redirect.status_code == 307
+    assert custom_redirect.headers.get("location") == "/custom-gw/mcp/"
     assert endpoint.status_code == 200, (
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )

@@ -99,6 +99,11 @@ class Settings(RuntimeSettings):
     otel_exporter_otlp_endpoint: str = _schema_field("", "code", "otel", empty_ok=True)
     otel_service_name: str = _schema_field("truealpha-llm-service", "code", "otel")
     otel_resource_attributes: str = _schema_field("", "code", "otel", empty_ok=True)
+    routed_prefix: str = Field(
+        default="/api",
+        description="External reverse-proxy path prefix mounted in front of backend endpoints (Q09)",
+        json_schema_extra={"source": "code", "group": "runtime"},
+    )
 
 
 class _LazySettings:

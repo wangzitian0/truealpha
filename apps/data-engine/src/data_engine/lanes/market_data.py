@@ -152,15 +152,27 @@ def market_data_refresh_pipeline_job() -> None:
     refresh_market_data_op()
 
 
-@dg.schedule(
-    job=market_data_refresh_pipeline_job,
-    cron_schedule=MARKET_DATA_REFRESH_CRON,
-    execution_timezone="UTC",
-    default_status=schedule_status(settings.environment),
-)
-def market_data_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+def _build_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name="market_data_refresh_schedule",
+        job=market_data_refresh_pipeline_job,
+        cron_schedule=MARKET_DATA_REFRESH_CRON,
+        execution_timezone="UTC",
+        default_status=schedule_status(environment),
+    )
+    def market_data_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tick = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+    return market_data_refresh_schedule
 
 
-defs = dg.Definitions(jobs=[market_data_refresh_pipeline_job], schedules=[market_data_refresh_schedule])
+market_data_refresh_schedule = _build_schedule(settings.environment)
+
+
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    sched = market_data_refresh_schedule if environment == settings.environment else _build_schedule(environment)
+    return dg.Definitions(jobs=[market_data_refresh_pipeline_job], schedules=[sched])
+
+
+defs = build_definitions()

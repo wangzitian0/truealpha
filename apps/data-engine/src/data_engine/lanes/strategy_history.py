@@ -53,18 +53,30 @@ def strategy_history_pipeline_job() -> None:
     project_strategy_history_op()
 
 
-@dg.schedule(
-    job=strategy_history_pipeline_job,
-    cron_schedule=STRATEGY_HISTORY_CRON,
-    execution_timezone="UTC",
-    default_status=schedule_status(settings.environment),
-)
-def strategy_history_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(
-        run_key=tick,
-        run_config={"ops": {"project_strategy_history_op": {"config": {"executed_at": tick}}}},
+def _build_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name="strategy_history_schedule",
+        job=strategy_history_pipeline_job,
+        cron_schedule=STRATEGY_HISTORY_CRON,
+        execution_timezone="UTC",
+        default_status=schedule_status(environment),
     )
+    def strategy_history_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tick = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(
+            run_key=tick,
+            run_config={"ops": {"project_strategy_history_op": {"config": {"executed_at": tick}}}},
+        )
+
+    return strategy_history_schedule
 
 
-defs = dg.Definitions(jobs=[strategy_history_pipeline_job], schedules=[strategy_history_schedule])
+strategy_history_schedule = _build_schedule(settings.environment)
+
+
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    sched = strategy_history_schedule if environment == settings.environment else _build_schedule(environment)
+    return dg.Definitions(jobs=[strategy_history_pipeline_job], schedules=[sched])
+
+
+defs = build_definitions()

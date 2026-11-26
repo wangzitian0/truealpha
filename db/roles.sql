@@ -17,7 +17,12 @@ do $$
 declare
     tbl text;
 begin
-    foreach tbl in array array['mart.current_pointer', 'mart.current_pointer_head'] loop
+    foreach tbl in array array[
+        'mart.current_pointer',
+        'mart.current_pointer_head',
+        'mart.nightly_verdicts',
+        'mart.output_invariant_results'
+    ] loop
         if to_regclass(tbl) is not null and has_table_privilege('mart_readonly', tbl, 'select') then
             execute format('revoke select on %s from mart_readonly', tbl);
         end if;
@@ -218,7 +223,6 @@ grant select on mart.nightly_verdicts to app_ops_reader;
 grant select on mart.oracle_outcomes to app_ops_reader;
 grant select on mart.cell_confidence to app_ops_reader;
 grant select on mart.capture_meta_info, mart.output_invariant_results to app_ops_reader;
-grant select on mart.output_invariant_results to mart_readonly;
 grant select on mart.fund_virtual_company to app_ops_reader;
 grant select on mart.issuer_analyst_ratings to app_ops_reader;
 grant select on mart.issuer_supply_chain_exposure to app_ops_reader;
@@ -235,3 +239,27 @@ grant select on raw.capture_obligation_results to app_ops_reader;
 -- of filed weights (same posture as raw capture obligations above).
 grant select on staging.fund_holding_facts to app_ops_reader;
 grant app_ops_reader to app_service_login;
+
+-- Q04: Separate ops view surface for operational readers and least-privilege non-superuser
+-- runtime role for data-engine workers (zero access to private app schema).
+grant usage on schema ops to app_ops_reader;
+grant select on all tables in schema ops to app_ops_reader;
+alter default privileges in schema ops grant select on tables to app_ops_reader;
+
+do $$ begin
+    create role data_engine_runtime nologin;
+exception when duplicate_object then null;
+end $$;
+
+grant usage on schema raw, staging, mart, ops to data_engine_runtime;
+grant select, insert, update, delete on all tables in schema raw, staging, mart, ops to data_engine_runtime;
+grant usage, select on all sequences in schema raw, staging, mart, ops to data_engine_runtime;
+alter default privileges in schema raw grant select, insert, update, delete on tables to data_engine_runtime;
+alter default privileges in schema staging grant select, insert, update, delete on tables to data_engine_runtime;
+alter default privileges in schema mart grant select, insert, update, delete on tables to data_engine_runtime;
+alter default privileges in schema ops grant select, insert, update, delete on tables to data_engine_runtime;
+alter default privileges in schema raw grant usage, select on sequences to data_engine_runtime;
+alter default privileges in schema staging grant usage, select on sequences to data_engine_runtime;
+alter default privileges in schema mart grant usage, select on sequences to data_engine_runtime;
+alter default privileges in schema ops grant usage, select on sequences to data_engine_runtime;
+revoke all on schema app from data_engine_runtime;

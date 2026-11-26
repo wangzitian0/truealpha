@@ -89,7 +89,8 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(TRUSTED_PROXIES))
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
 def mcp_slash(request: Request) -> RedirectResponse:
     del request
-    return RedirectResponse(f"{ROUTED_PREFIX}/mcp/", status_code=307)
+    prefix = settings.routed_prefix.rstrip("/")
+    return RedirectResponse(f"{prefix}/mcp/", status_code=307)
 
 
 app.mount(

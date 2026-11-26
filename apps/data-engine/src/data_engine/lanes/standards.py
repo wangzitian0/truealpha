@@ -26,7 +26,11 @@ from data_engine.datahub.standards.backfill import run_standard_backfill as _run
 from data_engine.datahub.standards.history import raise_if_every_attempt_failed
 from data_engine.datahub.standards.history import run_standard_history as _run_standard_history
 from data_engine.datahub.standards.planner import universe_issuers
-from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
+from data_engine.environment_universes import (
+    any_environment_universe_names,
+    contract_schedule_status,
+    scheduled_universe_names,
+)
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
 from data_engine.run_launcher import UNIVERSE_TAG, config_universe
@@ -777,9 +781,10 @@ def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> 
     )
 
 
-def _backfill_requests(executed_at: str, *, key_prefix: str = ""):
+def _backfill_requests(executed_at: str, *, key_prefix: str = "", environment: str | None = None):
     prefix = f"{key_prefix}:" if key_prefix else ""
-    for universe in scheduled_universe_names():
+    universes = scheduled_universe_names() if environment is None else scheduled_universe_names(environment)
+    for universe in universes:
         yield dg.RunRequest(
             run_key=f"{prefix}{executed_at}:{universe}",
             run_config=backfill_run_config(executed_at, universe),
@@ -804,12 +809,20 @@ def _cron_schedule(
     )(fn)
 
 
-standard_backfill_schedule = _cron_schedule(
-    standard_backfill_pipeline_job,
-    STANDARD_BACKFILL_CRON,
-    lambda context: _backfill_requests(context.scheduled_execution_time.isoformat()),
-    name="standard_backfill_schedule",
-)
+def _build_standard_backfill_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    return _cron_schedule(
+        standard_backfill_pipeline_job,
+        STANDARD_BACKFILL_CRON,
+        lambda context: _backfill_requests(
+            context.scheduled_execution_time.isoformat(),
+            environment=None if environment == settings.environment else environment,
+        ),
+        name="standard_backfill_schedule",
+        default_status=contract_schedule_status(environment),
+    )
+
+
+standard_backfill_schedule = _build_standard_backfill_schedule(settings.environment)
 
 
 @external_op
@@ -853,19 +866,29 @@ def history_run_config(executed_at: str, universe: str) -> dg.RunConfig:
     return dg.RunConfig(ops={"run_standard_history": StandardHistoryConfig(executed_at=executed_at, universe=universe)})
 
 
-standard_history_schedule = _cron_schedule(
-    standard_history_backfill_pipeline_job,
-    STANDARD_HISTORY_CRON,
-    lambda context: [
-        dg.RunRequest(
-            run_key=f"history:{(t := context.scheduled_execution_time.isoformat())}:{(u := lane_name(key))}",
-            run_config=history_run_config(t, u),
-        )
-        for key in universes_with_role("strategy")
-        if lane_name(key) in scheduled_universe_names()
-    ],
-    name="standard_history_schedule",
-)
+def _build_standard_history_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    return _cron_schedule(
+        standard_history_backfill_pipeline_job,
+        STANDARD_HISTORY_CRON,
+        lambda context: [
+            dg.RunRequest(
+                run_key=f"history:{(t := context.scheduled_execution_time.isoformat())}:{(u := lane_name(key))}",
+                run_config=history_run_config(t, u),
+            )
+            for key in universes_with_role("strategy")
+            if lane_name(key)
+            in (
+                scheduled_universe_names()
+                if environment == settings.environment
+                else scheduled_universe_names(environment)
+            )
+        ],
+        name="standard_history_schedule",
+        default_status=contract_schedule_status(environment),
+    )
+
+
+standard_history_schedule = _build_standard_history_schedule(settings.environment)
 
 
 def _utc_now_iso() -> str:
@@ -953,20 +976,29 @@ def head_reports_request(
     )
 
 
-head_reports_schedule = _cron_schedule(
-    head_reports_pipeline_job,
-    HEAD_REPORTS_CRON,
-    lambda context: [
-        head_reports_request(
-            universe,
-            (tick := context.scheduled_execution_time.isoformat()),
-            run_key=f"{tick}:{universe}",
-            only_if_stale=True,
-        )
-        for universe in scheduled_universe_names()
-    ],
-    name="head_reports_schedule",
-)
+def _build_head_reports_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
+    return _cron_schedule(
+        head_reports_pipeline_job,
+        HEAD_REPORTS_CRON,
+        lambda context: [
+            head_reports_request(
+                universe,
+                (tick := context.scheduled_execution_time.isoformat()),
+                run_key=f"{tick}:{universe}",
+                only_if_stale=True,
+            )
+            for universe in (
+                scheduled_universe_names()
+                if environment == settings.environment
+                else scheduled_universe_names(environment)
+            )
+        ],
+        name="head_reports_schedule",
+        default_status=contract_schedule_status(environment),
+    )
+
+
+head_reports_schedule = _build_head_reports_schedule(settings.environment)
 
 
 def _followed(cursor: str | None) -> dict[str, str]:
@@ -1048,12 +1080,20 @@ def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
 
 
 def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    if environment == settings.environment:
+        backfill_sched = standard_backfill_schedule
+        history_sched = standard_history_schedule
+        reports_sched = head_reports_schedule
+    else:
+        backfill_sched = _build_standard_backfill_schedule(environment)
+        history_sched = _build_standard_history_schedule(environment)
+        reports_sched = _build_head_reports_schedule(environment)
     return dg.Definitions(
         jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
         schedules=[
-            standard_backfill_schedule,
-            standard_history_schedule,
-            head_reports_schedule,
+            backfill_sched,
+            history_sched,
+            reports_sched,
             nport_monthly_schedule,
             thirteenf_quarterly_schedule,
             form4_daily_schedule,

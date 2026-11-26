@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -24,14 +25,20 @@ _SDK_DEFAULT_HTTP_GET = _sdk_delivery.default_http_get
 _AUDIT_USER_AGENT = "truealpha-ops-audit/1.0"
 
 
-def _health_url_for(env: str) -> str:
+def _health_url_for(env: str, *, base_url: str | None = None, domain: str | None = None) -> str:
+    resolved_base = (base_url or os.environ.get("TRUEALPHA_BASE_URL") or "").strip().rstrip("/")
+    if resolved_base:
+        return f"{resolved_base}/api/health"
+    resolved_domain = (domain or os.environ.get("TRUEALPHA_DOMAIN") or "").strip().strip(".")
+    if not resolved_domain:
+        raise ValueError("vision_audit requires --health-url, --base-url, TRUEALPHA_BASE_URL, or TRUEALPHA_DOMAIN")
     tier = env.strip().lower()
     if tier in {"prod", "production"}:
-        host = "truealpha.club"
+        host = resolved_domain
     elif tier == "staging":
-        host = "truealpha-staging.truealpha.club"
+        host = f"truealpha-staging.{resolved_domain}"
     else:
-        host = f"{tier}.truealpha.club"
+        host = f"{tier}.{resolved_domain}"
     return f"https://{host}/api/health"
 
 
@@ -291,10 +298,11 @@ def audit_vision(
     *,
     env: str = "production",
     health_url: str | None = None,
+    base_url: str | None = None,
     oracle_outcomes: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> VisionAuditReport:
-    resolved_url = health_url or _health_url_for(env)
+    resolved_url = health_url or _health_url_for(env, base_url=base_url)
     check_now = now or datetime.now(UTC)
     try:
         report: HealthReport = read_report(resolved_url, _http_get)
@@ -373,11 +381,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Audit TrueAlpha Vision & Gate Epics")
     parser.add_argument("--env", choices=["production", "staging"], default="production")
     parser.add_argument("--health-url", default=None)
+    parser.add_argument("--base-url", default=None)
     parser.add_argument("--fail-closed", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    report = audit_vision(env=args.env, health_url=args.health_url)
+    report = audit_vision(env=args.env, health_url=args.health_url, base_url=args.base_url)
     exit_code = 0 if (not args.fail_closed or report.all_passed) else 1
     if args.json:
         print(json.dumps(asdict(report), indent=2))
