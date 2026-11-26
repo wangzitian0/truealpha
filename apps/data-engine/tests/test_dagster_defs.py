@@ -1415,11 +1415,12 @@ def test_standard_history_schedule_filters_to_scheduled_universes(monkeypatch) -
 
 def test_preview_environment_sets_every_dagster_schedule_stopped() -> None:
     """Q09: Every Dagster schedule resolves from environment_contract.v1.json and stays STOPPED in preview."""
-    preview_defs = dagster_defs.build_definitions("preview")
-    schedules = list(preview_defs.schedules or ())
-    assert schedules
-    running = [sched.name for sched in schedules if sched.default_status != dg.DefaultScheduleStatus.STOPPED]
-    assert running == [], f"preview environment (live_vendor_calls=false) must keep all schedules STOPPED: {running}"
+    for env_name in ("preview", "pr", "canary", "preview/pr-123"):
+        preview_defs = dagster_defs.build_definitions(env_name)
+        schedules = list(preview_defs.schedules or ())
+        assert schedules
+        running = [sched.name for sched in schedules if sched.default_status != dg.DefaultScheduleStatus.STOPPED]
+        assert running == [], f"{env_name} (live_vendor_calls=false) must keep all schedules STOPPED: {running}"
 
     staging_defs = dagster_defs.build_definitions("staging")
     staging_status = {sched.name: sched.default_status for sched in (staging_defs.schedules or ())}

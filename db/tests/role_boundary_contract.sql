@@ -107,7 +107,9 @@ begin
         'mart.nightly_verdicts',
         'mart.output_invariant_results',
         'ops.nightly_verdicts',
-        'ops.output_invariant_results'
+        'ops.output_invariant_results',
+        'ops.pipeline_trigger_requests',
+        'ops.head_rollback_requests'
     ] loop
         if has_table_privilege('mart_readonly', restricted_tbl, 'select') then
             raise exception 'mart_readonly must not select from %', restricted_tbl;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dagster as dg
+from infra2_sdk.config import resolve_tier
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import lane_name
 
@@ -13,14 +14,28 @@ UNRECOGNISED_ENVIRONMENT_RULE = "staging"
 
 def rule_environment(environment: str | None = None) -> str:
     contract = load_environment_contract()
-    resolved = contract.normalize_environment(settings.environment if environment is None else environment)
-    return resolved if resolved in contract.environments else UNRECOGNISED_ENVIRONMENT_RULE
+    raw = settings.environment if environment is None else environment
+    resolved = contract.normalize_environment(raw)
+    if resolved in contract.environments:
+        return resolved
+    try:
+        tier = resolve_tier(raw).value
+        if tier in contract.environments:
+            return tier
+    except ValueError:
+        pass
+    return UNRECOGNISED_ENVIRONMENT_RULE
 
 
 def live_vendor_calls_enabled(environment: str | None = None) -> bool:
     contract = load_environment_contract()
     raw = settings.environment if environment is None else environment
     normalized = contract.normalize_environment(raw)
+    if normalized not in contract.environments:
+        try:
+            normalized = resolve_tier(raw).value
+        except ValueError:
+            normalized = ""
     if normalized in contract.environments:
         return bool(contract.environments[normalized].live_vendor_calls)
     if (raw or "").strip().lower() in {"dev", "ci", "local_dev"}:

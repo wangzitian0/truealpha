@@ -781,9 +781,10 @@ def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> 
     )
 
 
-def _backfill_requests(executed_at: str, *, key_prefix: str = ""):
+def _backfill_requests(executed_at: str, *, key_prefix: str = "", environment: str | None = None):
     prefix = f"{key_prefix}:" if key_prefix else ""
-    for universe in scheduled_universe_names():
+    universes = scheduled_universe_names() if environment is None else scheduled_universe_names(environment)
+    for universe in universes:
         yield dg.RunRequest(
             run_key=f"{prefix}{executed_at}:{universe}",
             run_config=backfill_run_config(executed_at, universe),
@@ -812,7 +813,10 @@ def _build_standard_backfill_schedule(environment: str = settings.environment) -
     return _cron_schedule(
         standard_backfill_pipeline_job,
         STANDARD_BACKFILL_CRON,
-        lambda context: _backfill_requests(context.scheduled_execution_time.isoformat()),
+        lambda context: _backfill_requests(
+            context.scheduled_execution_time.isoformat(),
+            environment=None if environment == settings.environment else environment,
+        ),
         name="standard_backfill_schedule",
         default_status=contract_schedule_status(environment),
     )
@@ -872,7 +876,12 @@ def _build_standard_history_schedule(environment: str = settings.environment) ->
                 run_config=history_run_config(t, u),
             )
             for key in universes_with_role("strategy")
-            if lane_name(key) in scheduled_universe_names()
+            if lane_name(key)
+            in (
+                scheduled_universe_names()
+                if environment == settings.environment
+                else scheduled_universe_names(environment)
+            )
         ],
         name="standard_history_schedule",
         default_status=contract_schedule_status(environment),
@@ -978,7 +987,11 @@ def _build_head_reports_schedule(environment: str = settings.environment) -> dg.
                 run_key=f"{tick}:{universe}",
                 only_if_stale=True,
             )
-            for universe in scheduled_universe_names()
+            for universe in (
+                scheduled_universe_names()
+                if environment == settings.environment
+                else scheduled_universe_names(environment)
+            )
         ],
         name="head_reports_schedule",
         default_status=contract_schedule_status(environment),
