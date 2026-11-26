@@ -189,7 +189,7 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         monkeypatch.setattr(settings, "secret_key", SecretStr("test-session-secret-for-ci"))
         pw_hash = bcrypt.hashpw(b"correct-horse-battery", bcrypt.gensalt(rounds=4)).decode("ascii")
         stored_blobs: dict[str, bytes] = {}
-        monkeypatch.setattr(library_service, "create_s3_client", lambda *_a, **_k: object())
+        monkeypatch.setattr(library_service, "_s3_client", lambda: object())
 
         def _put_blob(_c: object, *, bucket: str, key: str, data: bytes, **_k: object) -> dict[str, object]:
             stored_blobs[f"{bucket}/{key}"] = data
