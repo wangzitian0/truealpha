@@ -19,11 +19,14 @@ export default async function EntityDetailPage({
   searchParams?: Promise<{ convention?: string }>;
 }) {
   const [{ id }, sp] = await Promise.all([params, searchParams ?? Promise.resolve<{ convention?: string }>({})]);
-  const convention: PegGrowthConvention = sp.convention === "consensus" || sp.convention === "guidance" ? sp.convention : "historical_cagr";
+  const convention: PegGrowthConvention =
+    sp.convention === "consensus" || sp.convention === "guidance" || sp.convention === "geometric_cagr"
+      ? sp.convention
+      : "historical_cagr";
   const issuerId = decodeRouteParam(id);
   const { data: loaded, error } = await loadAuthed("/research/entities", async (opts) => {
     const [detail, supplyChain, ratings] = await Promise.all([
-      api.getEntity(issuerId, opts),
+      api.getEntity(issuerId, opts, convention),
       api.getSupplyChain(issuerId, opts).catch(() => null),
       api.getAnalystRatings(issuerId, opts).catch(() => null),
     ]);
@@ -153,7 +156,15 @@ export default async function EntityDetailPage({
             </div>
           )}
           {(detail.node_values?.length ?? 0) > 0 && <div className="rounded-xl border border-border bg-card p-5"><h2 className="text-base font-semibold">Metric forest nodes</h2><TraceInputsTable nodeValues={detail.node_values ?? []} /></div>}
-          {analystRatings && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Analyst Consensus:</strong> {formatCell(analystRatings.consensus_rating as string | null)} · Analysts: {String(analystRatings.analysts_count ?? 0)}</div>}
+          {analystRatings && (
+            <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300">
+              <strong className="text-white">Analyst Consensus:</strong>{" "}
+              {formatCell(analystRatings.consensus_rating as string | null)} · Target Price:{" "}
+              {formatCell(formatRatio(analystRatings.target_price as string | null))} · Track Record:{" "}
+              {formatCell(formatRatio(analystRatings.track_record_score as string | null))} · Analysts:{" "}
+              {String(analystRatings.analysts_count ?? 0)}
+            </div>
+          )}
           {supplyExposure && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Supply Chain Scenario Exposure:</strong> {formatCell(supplyExposure.exposure_score as string | null)} · Partners: {String(supplyExposure.direct_partners ?? 0)}</div>}
         </>
       )}

@@ -150,6 +150,21 @@ def has_table(connection: Any, qualified_name: str) -> bool:
     return bool(safe_call(connection, _probe, False))
 
 
+def has_column(connection: Any, schema: str, table: str, column: str) -> bool:
+    def _probe() -> bool:
+        with connection.cursor() as cur:
+            cur.execute(
+                "select exists ("
+                "select 1 from pg_attribute where attrelid = to_regclass(%s) and attname = %s and not attisdropped"
+                ")",
+                (f"{schema}.{table}", column),
+            )
+            res = cur.fetchone()
+            return bool(res and res[0])
+
+    return bool(safe_call(connection, _probe, False))
+
+
 def parse_utc(value: str | datetime) -> datetime:
     if isinstance(value, str):
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)

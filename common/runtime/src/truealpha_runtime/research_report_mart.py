@@ -295,34 +295,145 @@ class MartResearchReadRepository:
             issuer_modules,
         )
 
+    def _load_etf_subject(self, eid: str, cutoff_at: datetime) -> ReportSubject:
+        clean = eid.strip()
+        token = clean.split(":")[-1].split("/")[-1].strip().upper()
+        series_cand = clean if clean.lower().startswith("etf:series:") else f"etf:series:{token}"
+        default_name = _ETF_DISPLAY_NAMES.get(clean.lower(), clean)
+        if not self._database_url:
+            return ReportSubject(
+                subject_id=eid,
+                display_name=default_name,
+                sections=(
+                    _module_absent(ReportSectionKind.ETF_VIRTUAL_COMPANY, "ETF virtual company", NO_SERVED_ROW),
+                    _module_absent(ReportSectionKind.VALUATION, "Valuation (three-tier P/S)", NO_SERVED_ROW),
+                ),
+            )
+        sql = """
+          select f.run_id, f.fund_id, coalesce(nullif(f.fund_name, ''), f.fund_id) as fund_name,
+                 f.cutoff, f.report_period,
+                 f.weighted_valuation_gap::text as weighted_valuation_gap,
+                 f.valuation_basis,
+                 f.total_weight_pct::text as total_weight_pct,
+                 f.resolved_weight_pct::text as resolved_weight_pct,
+                 f.valued_weight_pct::text as valued_weight_pct,
+                 f.lines, f.valued_lines,
+                 f.confidence::text as confidence,
+                 f.reason_codes,
+                 coalesce(f.availability_status, 'unavailable') as availability_status,
+                 coalesce(f.factor_validation_status, 'not_evaluated') as factor_validation_status,
+                 f.definition_version,
+                 to_jsonb(f) ->> 'virtual_revenue' as virtual_revenue,
+                 to_jsonb(f) ->> 'virtual_gross_profit' as virtual_gross_profit,
+                 to_jsonb(f) ->> 'virtual_employees' as virtual_employees,
+                 to_jsonb(f) ->> 'virtual_gppe' as virtual_gppe
+          from mart.fund_virtual_company f
+          where f.run_id in (
+            select h.run_id from mart.served_head h
+            where h.run_id is not null and not starts_with(h.universe_id, 'universe:canary-')
+          )
+            and f.cutoff <= %s
+            and (
+              f.fund_id = %s
+              or f.fund_id = %s
+              or upper(f.fund_id) = %s
+              or upper(f.fund_name) like %s
+            )
+          order by (f.fund_id = %s or f.fund_id = %s) desc, f.cutoff desc, f.created_at desc
+          limit 1
+        """
+        pattern = f"%{token}%" if len(token) >= 2 else clean.upper()
+        try:
+            with psycopg.connect(self._database_url, connect_timeout=5, row_factory=dict_row) as conn:
+                conn.execute("set local role mart_readonly")
+                conn.execute("select set_config('statement_timeout', '5s', true)")
+                row = conn.execute(sql, (cutoff_at, clean, series_cand, token, pattern, clean, series_cand)).fetchone()
+                conn.execute("reset role")
+        except psycopg.Error:
+            return ReportSubject(
+                subject_id=eid,
+                display_name=default_name,
+                sections=(
+                    _module_absent(ReportSectionKind.ETF_VIRTUAL_COMPANY, "ETF virtual company", MART_READ_FAILED),
+                    _module_absent(ReportSectionKind.VALUATION, "Valuation (three-tier P/S)", MART_READ_FAILED),
+                ),
+            )
+        if row is None:
+            return ReportSubject(
+                subject_id=eid,
+                display_name=default_name,
+                sections=(
+                    _module_absent(ReportSectionKind.ETF_VIRTUAL_COMPANY, "ETF virtual company", NO_SERVED_ROW),
+                    _module_absent(ReportSectionKind.VALUATION, "Valuation (three-tier P/S)", NO_SERVED_ROW),
+                ),
+            )
+        row_cutoff = row["cutoff"]
+        period = (
+            row["report_period"].isoformat() if row.get("report_period") is not None else row_cutoff.date().isoformat()
+        )
+        avail = AvailabilityStatus(str(row["availability_status"]))
+        val_status = FactorValidationStatus(str(row["factor_validation_status"]))
+        conf = Decimal(str(row["confidence"])) if row.get("confidence") is not None else None
+        reasons = tuple(str(c) for c in (row.get("reason_codes") or ()))
+        fver = str(row.get("definition_version") or "etf_virtual_company:v0")
+        trace = EvidenceTrace(
+            reference_id=f"mart.fund_virtual_company:{row['run_id']}:{row['fund_id']}",
+            materialized_output_id=str(row["run_id"]),
+        )
+
+        def _rv(label: str, value: Any, unit: str | None = None) -> ResultValue:
+            txt = None if value is None else str(value)
+            return ResultValue(
+                label=label,
+                value=txt,
+                unit=unit,
+                period=period,
+                cutoff_at=row_cutoff,
+                availability=avail if txt is not None else AvailabilityStatus.UNAVAILABLE,
+                confidence=conf,
+                factor_version=fver,
+                trace=trace,
+            )
+
+        return ReportSubject(
+            subject_id=eid,
+            display_name=str(row.get("fund_name") or default_name),
+            sections=(
+                ReportSection(
+                    section_kind=ReportSectionKind.ETF_VIRTUAL_COMPANY,
+                    title="ETF virtual company",
+                    availability=avail,
+                    validation_status=val_status,
+                    reason_codes=reasons,
+                    results=(
+                        _rv("weighted_valuation_gap", row.get("weighted_valuation_gap")),
+                        _rv("valued_weight_pct", row.get("valued_weight_pct")),
+                        _rv("resolved_weight_pct", row.get("resolved_weight_pct")),
+                        _rv("virtual_revenue", row.get("virtual_revenue"), "USD"),
+                        _rv("virtual_gross_profit", row.get("virtual_gross_profit"), "USD"),
+                        _rv("virtual_employees", row.get("virtual_employees")),
+                        _rv("virtual_gppe", row.get("virtual_gppe"), "USD"),
+                    ),
+                ),
+                ReportSection(
+                    section_kind=ReportSectionKind.VALUATION,
+                    title="Valuation (ETF consolidation)",
+                    availability=avail,
+                    validation_status=val_status,
+                    reason_codes=reasons,
+                    results=(
+                        _rv("valuation_basis", row.get("valuation_basis")),
+                        _rv("weighted_valuation_gap", row.get("weighted_valuation_gap")),
+                        _rv("valued_lines", row.get("valued_lines")),
+                        _rv("lines", row.get("lines")),
+                    ),
+                ),
+            ),
+        )
+
     def load_subjects(self, *, request: ResearchReportRequest, context: AccessContext) -> tuple[ReportSubject, ...]:
         if request.report_kind is ResearchReportKind.ETF:
-            return tuple(
-                ReportSubject(
-                    subject_id=eid,
-                    display_name=_ETF_DISPLAY_NAMES.get(eid, eid),
-                    sections=(
-                        ReportSection(
-                            section_kind=ReportSectionKind.ETF_VIRTUAL_COMPANY,
-                            title="ETF virtual company",
-                            availability=AvailabilityStatus.UNAVAILABLE,
-                            results=(
-                                ResultValue(
-                                    label="virtual_company_fundamentals",
-                                    value=None,
-                                    cutoff_at=request.cutoff_at,
-                                    availability=AvailabilityStatus.UNAVAILABLE,
-                                ),
-                            ),
-                            reason_codes=("etf_virtual_company_module_not_materialized",),
-                        ),
-                        _module_absent(
-                            ReportSectionKind.VALUATION, "Valuation (three-tier P/S)", "etf_valuation_not_materialized"
-                        ),
-                    ),
-                )
-                for eid in request.target_entity_ids
-            )
+            return tuple(self._load_etf_subject(eid, request.cutoff_at) for eid in request.target_entity_ids)
         res = self._strategy_repository.get_latest(
             strategy_id=request.strategy_id or _DEFAULT_STRATEGY_ID, context=context
         )

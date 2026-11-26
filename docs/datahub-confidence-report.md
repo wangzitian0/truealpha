@@ -50,11 +50,13 @@ same document never corroborates its original (docs/datahub-quality-report.md, s
 headcount plane's two producers (`10k-extraction`, `manual-review`) both read the issuer's
 10-K and are one lineage: equal values give `same_lineage`, never an agreement reason.
 
-**The stored `confidence` column is not used.** `staging.capture_normalized_observations.confidence`
-is stamped per semantic by the parser (0.85 market-price, 0.92 financial-fact, 1.00
-identity on the current heads) — not the formula in docs/confidence-calibration.md. The
-report measures the distinct values per semantic in the run and records
-`metadata.stored_confidence.used_for_bands = false`.
+**Materialized leaf & extraction confidence calibration (#1851).** SEC financial facts,
+market cap (`price * shares_outstanding`), headcount extraction, segment revenue extraction, theme
+purity (`min` across partition segments), supply-chain exposure (`min` across edges >= `0.40`),
+and analyst track-record cells now pass through `single_origin_confidence` /
+`calibrated_confidence_for` (`data_engine/datahub/_helpers.py`), backing `mart.metric_node_values`
+with the continuous calibration formula while keeping `confidence_report.py` for cross-origin
+agreement grading.
 
 ## Families and policies
 

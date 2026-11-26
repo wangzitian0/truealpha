@@ -17,6 +17,7 @@ from data_engine.contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
+from data_engine.lanes.backtest import BACKTEST_JOB_NAME, NightlyBacktestConfig, nightly_backtest_pipeline_job
 from data_engine.lanes.capture import (
     CANARY_JOB_NAME,
     TICK_BY_JOB,
@@ -95,7 +96,7 @@ def _tick_run_request(
 
 
 @dg.sensor(
-    jobs=list(capture_defs.jobs or []),
+    jobs=[*list(capture_defs.jobs or []), nightly_backtest_pipeline_job],
     minimum_interval_seconds=30,
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
@@ -104,16 +105,37 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
         consume_head_rollback_requests(connection)
         pending = connection.execute(
             "select request_id, executed_at, dedupe_key, job_name, "
-            "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false) "
+            "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false), "
+            "coalesce(to_jsonb(request)->'config_json', '{}'::jsonb) "
             "from staging.pipeline_trigger_requests request "
             "where consumed_at is null order by request_id limit 5"
         ).fetchall()
-        for request_id, executed_at, dedupe_key, job_name, force_fetch in pending:
+        for request_id, executed_at, dedupe_key, job_name, force_fetch, raw_config in pending:
             run_key = f"manual:{dedupe_key}"
-            tick = TICK_BY_JOB.get(job_name, TICK_BY_JOB[TOPT_LIVE_JOB_NAME])
-            yield _tick_run_request(
-                run_key, tick, executed_at.astimezone(UTC).isoformat(), force_fetch=bool(force_fetch)
-            )
+            exec_iso = executed_at.astimezone(UTC).isoformat()
+            if job_name == BACKTEST_JOB_NAME:
+                cfg = raw_config if isinstance(raw_config, dict) else {}
+                overrides = cfg.get("overrides_json")
+                if isinstance(overrides, dict):
+                    overrides = json.dumps(overrides)
+                yield dg.RunRequest(
+                    run_key=run_key,
+                    job_name=BACKTEST_JOB_NAME,
+                    run_config=dg.RunConfig(
+                        ops={
+                            "run_nightly_backtest_op": NightlyBacktestConfig(
+                                executed_at=exec_iso,
+                                definition_resource=cfg.get("definition_resource"),
+                                overrides_json=overrides,
+                                start_cutoff=cfg.get("start_cutoff"),
+                                end_cutoff=cfg.get("end_cutoff"),
+                            )
+                        }
+                    ),
+                )
+            else:
+                tick = TICK_BY_JOB.get(job_name, TICK_BY_JOB[TOPT_LIVE_JOB_NAME])
+                yield _tick_run_request(run_key, tick, exec_iso, force_fetch=bool(force_fetch))
             connection.execute(
                 "update staging.pipeline_trigger_requests "
                 "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",

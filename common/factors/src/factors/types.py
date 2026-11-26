@@ -32,6 +32,7 @@ __all__ = [
 class GrowthConvention(StrEnum):
     ANALYST_CONSENSUS = "analyst_consensus"
     HISTORICAL_CAGR = "historical_cagr"
+    GEOMETRIC_CAGR = "geometric_cagr"
     COMPANY_GUIDANCE = "company_guidance"
 
 

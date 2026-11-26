@@ -2,6 +2,7 @@ import Link from "next/link";
 import { api } from "@/client/api";
 import { formatCell, formatPercentFromFraction, formatRatio } from "@/client/format";
 import { BacktestLimitations, backtestStatusStyle, runLimitations } from "@/components/backtest-basis";
+import { BacktestTriggerButton } from "@/components/backtest-trigger-button";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
 import { ReadStateNotice } from "@/components/read-state";
@@ -14,9 +15,12 @@ export default async function BacktestListPage() {
 
   return (
     <section aria-labelledby="backtest-list-heading" className="space-y-6">
-      <div>
-        <h1 id="backtest-list-heading" className="text-2xl font-bold tracking-tight">Portfolio Backtests</h1>
-        <p className="mt-1 text-sm text-gray-400">Quarter-end PIT backtests with explicit price basis and claim ceiling.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 id="backtest-list-heading" className="text-2xl font-bold tracking-tight">Portfolio Backtests</h1>
+          <p className="mt-1 text-sm text-gray-400">Quarter-end PIT backtests with explicit price basis and claim ceiling.</p>
+        </div>
+        <BacktestTriggerButton />
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {runs.length === 0 && !error ? (

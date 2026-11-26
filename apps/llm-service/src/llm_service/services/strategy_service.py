@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
+import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
-from truealpha_contracts.strategy import ExclusionReason
+from truealpha_contracts.strategy import ExclusionReason, load_strategy_definition
 from truealpha_contracts.universes import universes_with_role
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository, read_strategy_provenance
 
 from llm_service.config import settings
-from llm_service.services._db import with_mart_readonly
+from llm_service.services._db import with_app_runtime, with_mart_readonly
 from llm_service.services.panel_service import (
     GPPE_VARIANT_KEYS,
     RANKING_PANEL_INPUT_KEYS,
@@ -40,6 +43,8 @@ def normalize_peg_convention(value: str | None) -> str:
         return "consensus"
     if value in {"guidance", "company_guidance"}:
         return "guidance"
+    if value in {"geometric_cagr", "cagr_3y"}:
+        return "geometric_cagr"
     return "historical_cagr"
 
 
@@ -50,8 +55,18 @@ def normalize_ranking_universe(value: str | None) -> str | None:
         return keys[0] if keys else None
     if clean == "all":
         return "all"
+    if clean.startswith("universe-list:"):
+        clean = clean.split(":", 1)[1].strip()
     contract = load_environment_contract()
-    return clean if clean in contract.universes else None
+    if clean in contract.universes:
+        return clean
+    for key, rec in contract.universes.items():
+        if clean.startswith(rec.id_prefix):
+            return key
+    try:
+        return contract.universe_of_id(clean)
+    except UnknownUniverse:
+        return None
 
 
 def matches_ranking_universe(universe_id: str | None, universe: str) -> bool:
@@ -211,6 +226,21 @@ class BacktestDetailResponse(BaseModel):
     run: BacktestRunDto
     valuations: list[BacktestValuationDto] = Field(default_factory=list)
     trades: list[BacktestTradeDto] = Field(default_factory=list)
+
+
+class TriggerBacktestRequest(BaseModel):
+    definition_resource: str | None = None
+    start_cutoff: str | None = None
+    end_cutoff: str | None = None
+    executed_at: str | None = None
+
+
+class TriggerBacktestResponse(BaseModel):
+    request_id: int
+    dedupe_key: str
+    job_name: str = "nightly_backtest_pipeline"
+    run_key: str
+    executed_at: str
 
 
 _PRESERVED_AVAILABILITY_STATUSES = frozenset({"not_applicable", "low_confidence", "stale", "error"})
@@ -551,6 +581,61 @@ def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> Back
     return with_mart_readonly(_q, database_url=database_url)
 
 
+def trigger_backtest_run(
+    principal_id: str,
+    req: TriggerBacktestRequest | None = None,
+    *,
+    database_url: str | None = None,
+) -> TriggerBacktestResponse:
+    """Queue a governed nightly backtest execution via `staging.pipeline_trigger_requests`."""
+    payload = req or TriggerBacktestRequest()
+    if payload.definition_resource:
+        try:
+            load_strategy_definition(payload.definition_resource)
+        except FileNotFoundError as exc:
+            raise ValueError(f"unknown strategy definition: {payload.definition_resource}") from exc
+    executed_at_dt = (
+        datetime.fromisoformat(payload.executed_at.replace("Z", "+00:00")).astimezone(UTC)
+        if payload.executed_at
+        else datetime.now(UTC).replace(microsecond=0)
+    )
+    executed_iso = executed_at_dt.isoformat()
+    config: dict[str, Any] = {}
+    if payload.definition_resource:
+        config["definition_resource"] = payload.definition_resource
+    if payload.start_cutoff:
+        datetime.fromisoformat(payload.start_cutoff.replace("Z", "+00:00"))
+        config["start_cutoff"] = payload.start_cutoff
+    if payload.end_cutoff:
+        datetime.fromisoformat(payload.end_cutoff.replace("Z", "+00:00"))
+        config["end_cutoff"] = payload.end_cutoff
+    dedupe_key = str(uuid.uuid4())
+    config_json = json.dumps(config, sort_keys=True)
+
+    def _q(cur: Any) -> int:
+        cur.execute(
+            """
+            insert into staging.pipeline_trigger_requests (
+                job_name, executed_at, requested_by, dedupe_key, force_fetch, config_json
+            )
+            values ('nightly_backtest_pipeline', %s, %s, %s, false, %s::jsonb)
+            returning request_id
+            """,
+            (executed_at_dt, principal_id, dedupe_key, config_json),
+        )
+        row = cur.fetchone()
+        return int(row["request_id"])
+
+    req_id = with_app_runtime(_q, database_url=database_url)
+    return TriggerBacktestResponse(
+        request_id=req_id,
+        dedupe_key=dedupe_key,
+        job_name="nightly_backtest_pipeline",
+        run_key=f"manual:{dedupe_key}",
+        executed_at=executed_iso,
+    )
+
+
 def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
     payload = run.get("metrics_payload")
     stored = payload.get("limitations") if isinstance(payload, dict) else None
@@ -600,6 +685,8 @@ __all__ = [
     "RankingsResponse",
     "StrategyDecisionItemDto",
     "StrategyRunPageResponse",
+    "TriggerBacktestRequest",
+    "TriggerBacktestResponse",
     "backtest_run_limitations",
     "call_strategy_repository",
     "get_backtest_detail",
@@ -610,4 +697,5 @@ __all__ = [
     "normalize_peg_convention",
     "normalize_ranking_universe",
     "resolve_decision_availability",
+    "trigger_backtest_run",
 ]

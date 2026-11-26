@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
+from factors.base.peg import peg as compute_peg
+from factors.types import Fact, GrowthConvention, UnitFamily
 from pydantic import BaseModel, Field
+from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import (
     _ANALYST_RATINGS_BY_IDS_SQL,
@@ -38,6 +42,7 @@ from llm_service.services.strategy_service import (
     StrategyDecisionItemDto,
     StrategyRunPageResponse,
     get_strategy_run_page,
+    normalize_peg_convention,
     resolve_decision_availability,
 )
 
@@ -113,6 +118,10 @@ _FUND_VIRTUAL_COLS = (
     " weighted_valuation_gap::text as weighted_valuation_gap, valuation_basis,"
     " total_weight_pct::text as total_weight_pct, resolved_weight_pct::text as resolved_weight_pct,"
     " valued_weight_pct::text as valued_weight_pct, lines, valued_lines,"
+    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_revenue' as virtual_revenue,"
+    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_gross_profit' as virtual_gross_profit,"
+    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_employees' as virtual_employees,"
+    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_gppe' as virtual_gppe,"
     " confidence::text as confidence, coalesce(availability_status, 'unavailable') as availability_status,"
     " source_evidence_status, factor_validation_status, reason_codes"
 )
@@ -200,6 +209,10 @@ class FundValuationDto(BaseModel):
     total_weight_pct: str = "0.00"
     weighted_gap: str | None = None
     weighted_gap_basis: str | None = None
+    virtual_revenue: str | None = None
+    virtual_gross_profit: str | None = None
+    virtual_employees: str | None = None
+    virtual_gppe: str | None = None
     availability_status: str | None = None
     source_evidence_status: str | None = None
     factor_validation_status: str | None = None
@@ -611,10 +624,126 @@ def _fetch_issuer_basic_info_from_cursor(cur: Any, candidates: list[str]) -> Iss
     )
 
 
+def _apply_entity_peg_convention(
+    decisions: list[StrategyDecisionItemDto],
+    node_values: list[TraceNodeValueDto],
+    convention: str | None,
+) -> list[StrategyDecisionItemDto]:
+    norm = normalize_peg_convention(convention)
+    if not decisions or norm == "historical_cagr":
+        return decisions
+    d = decisions[0]
+    if norm == "guidance":
+        return [
+            d.model_copy(
+                update={
+                    "peg": None,
+                    "peg_rank": None,
+                    "peg_reason_codes": ["growth_convention_unsourced:company_guidance"],
+                }
+            ),
+            *decisions[1:],
+        ]
+    if norm == "consensus":
+        cons = next((n for n in node_values if n.node_key == "peg_consensus" and n.value is not None), None)
+        cons_rank = next((n for n in node_values if n.node_key == "peg_consensus_rank" and n.value is not None), None)
+        if cons is not None:
+            return [
+                d.model_copy(
+                    update={
+                        "peg": cons.value,
+                        "peg_rank": int(Decimal(cons_rank.value)) if cons_rank and cons_rank.value else None,
+                        "peg_reason_codes": [],
+                    }
+                ),
+                *decisions[1:],
+            ]
+        return [
+            d.model_copy(
+                update={
+                    "peg": None,
+                    "peg_rank": None,
+                    "peg_reason_codes": ["growth_convention_unsourced:analyst_consensus"],
+                }
+            ),
+            *decisions[1:],
+        ]
+    # Compute geometric_cagr on the already-loaded wide panel leaves in-memory without adding DB queries.
+    as_of = datetime.now(UTC)
+    if d.cutoff_at:
+        try:
+            as_of = datetime.fromisoformat(d.cutoff_at.replace("Z", "+00:00")).astimezone(UTC)
+        except ValueError:
+            pass
+    facts: list[Fact] = []
+    seen_annual: set[str] = set()
+    for n in node_values:
+        if n.value is None:
+            continue
+        conf = Decimal(n.confidence) if n.confidence is not None else Decimal("0.8")
+        if n.node_key in {"last_close", "price"} and not any(f.metric == "price" for f in facts):
+            facts.append(
+                Fact(
+                    entity_id=d.issuer_id,
+                    metric="price",
+                    value=Decimal(n.value),
+                    unit_family=UnitFamily.PER_SHARE,
+                    confidence=conf,
+                    as_of=as_of,
+                )
+            )
+        elif n.node_key == "shares_outstanding" and not any(f.metric == "shares_outstanding" for f in facts):
+            facts.append(
+                Fact(
+                    entity_id=d.issuer_id,
+                    metric="shares_outstanding",
+                    value=Decimal(n.value),
+                    unit_family=UnitFamily.COUNT,
+                    confidence=conf,
+                    as_of=as_of,
+                )
+            )
+        elif n.node_key == "net_income" and n.period and n.period not in seen_annual:
+            try:
+                period_end = datetime.fromisoformat(n.period[:10]).date()
+            except ValueError:
+                continue
+            seen_annual.add(n.period)
+            facts.append(
+                Fact(
+                    entity_id=d.issuer_id,
+                    metric="net_income",
+                    value=Decimal(n.value),
+                    unit_family=UnitFamily.CURRENCY,
+                    confidence=conf,
+                    as_of=as_of,
+                    fiscal_period=encode_annual(period_end),
+                )
+            )
+    res = compute_peg(
+        facts,
+        entity_id=d.issuer_id,
+        growth_convention=GrowthConvention.GEOMETRIC_CAGR,
+        as_of=as_of,
+        cagr_years=3,
+    )
+    return [
+        d.model_copy(
+            update={
+                "peg": str(res.value) if res.value is not None else None,
+                "peg_rank": None,
+                "peg_reason_codes": list(res.flags),
+            }
+        ),
+        *decisions[1:],
+    ]
+
+
 def get_entity_detail(
     context: AccessContext,
     *,
     issuer_id: str,
+    convention: str | None = None,
     database_url: str | None = None,
 ) -> EntityDetailResponse:
     del context
@@ -626,6 +755,7 @@ def get_entity_detail(
         decision_row = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
         decisions = [_decision_row_to_dto(decision_row, display_map=display_map)] if decision_row else []
         node_values = _fetch_trace_nodes_from_cursor(cur, cand)
+        decisions = _apply_entity_peg_convention(decisions, node_values, convention)
         themes = _fetch_company_themes_from_cursor(cur, cand)
         sc_row = _fetch_module_row_from_cursor(cur, _SUPPLY_CHAIN_BY_IDS_SQL, cand)
         ar_row = _fetch_module_row_from_cursor(cur, _ANALYST_RATINGS_BY_IDS_SQL, cand)
@@ -753,7 +883,13 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
         left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
         left join mart.entity_identity ei on ei.entity_id::text = d.issuer_id
         left join mart.entity_identity ei_issuer on ei_issuer.entity_id::text = d.issuer_id
-        where scope.capture_run_id = %s
+        where (
+            scope.capture_run_id = %s
+            or scope.capture_run_id in (
+              select sh.run_id from mart.served_head sh
+              where sh.run_id is not null and not starts_with(sh.universe_id, 'universe:canary-')
+            )
+        )
       )
       select v.fund_id, v.fund_name, v.report_period, v.holding_name, v.ticker,
              v.percent_of_net_assets::text as weight_pct,
@@ -801,6 +937,10 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
                     total_weight_pct=str(cv.get("total_weight_pct") or "0.00"),
                     weighted_gap=c.get("weighted_valuation_gap"),
                     weighted_gap_basis=c.get("valuation_basis"),
+                    virtual_revenue=c.get("virtual_revenue"),
+                    virtual_gross_profit=c.get("virtual_gross_profit"),
+                    virtual_employees=c.get("virtual_employees"),
+                    virtual_gppe=c.get("virtual_gppe"),
                     availability_status=c.get("availability_status"),
                     source_evidence_status=c.get("source_evidence_status"),
                     factor_validation_status=c.get("factor_validation_status"),
@@ -1157,6 +1297,10 @@ def get_etf_profile_payload(*, fund_id: str, database_url: str | None = None) ->
         "valued_weight_pct": _opt_str(fund_row, "valued_weight_pct") or "0.00",
         "lines": lines if lines is not None else len(holdings),
         "valued_lines": _opt_int(fund_row, "valued_lines") or 0,
+        "virtual_revenue": _opt_str(fund_row, "virtual_revenue"),
+        "virtual_gross_profit": _opt_str(fund_row, "virtual_gross_profit"),
+        "virtual_employees": _opt_str(fund_row, "virtual_employees"),
+        "virtual_gppe": _opt_str(fund_row, "virtual_gppe"),
         "confidence": _opt_str(fund_row, "confidence"),
         "availability_status": _opt_str(fund_row, "availability_status") or "unavailable",
         "reason_codes": list(codes) if codes is not None else ["no_virtual_company_consolidation_found"],

@@ -331,6 +331,54 @@
         }
       }
     },
+    "/api/v1/strategy/backtests/trigger": {
+      "post": {
+        "tags": [
+          "strategy"
+        ],
+        "summary": "Backtest Trigger",
+        "operationId": "strategy_backtest_trigger",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TriggerBacktestRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerBacktestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/strategy/backtests/{run_id}": {
       "get": {
         "tags": [
@@ -589,6 +637,22 @@
             "schema": {
               "type": "string",
               "title": "Issuer Id"
+            }
+          },
+          {
+            "name": "convention",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Convention"
             }
           }
         ],
@@ -1342,6 +1406,17 @@
               }
             ],
             "title": "Target Price"
+          },
+          "track_record_score": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Record Score"
           },
           "analysts_count": {
             "type": "integer",
@@ -2988,6 +3063,50 @@
               }
             ],
             "title": "Weighted Gap Basis"
+          },
+          "virtual_revenue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Revenue"
+          },
+          "virtual_gross_profit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Gross Profit"
+          },
+          "virtual_employees": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Employees"
+          },
+          "virtual_gppe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Gppe"
           },
           "availability_status": {
             "anyOf": [
@@ -4882,6 +5001,89 @@
         },
         "type": "object",
         "title": "TraceResponse"
+      },
+      "TriggerBacktestRequest": {
+        "properties": {
+          "definition_resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Resource"
+          },
+          "start_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Cutoff"
+          },
+          "end_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Cutoff"
+          },
+          "executed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executed At"
+          }
+        },
+        "type": "object",
+        "title": "TriggerBacktestRequest"
+      },
+      "TriggerBacktestResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id"
+          },
+          "dedupe_key": {
+            "type": "string",
+            "title": "Dedupe Key"
+          },
+          "job_name": {
+            "type": "string",
+            "title": "Job Name",
+            "default": "nightly_backtest_pipeline"
+          },
+          "run_key": {
+            "type": "string",
+            "title": "Run Key"
+          },
+          "executed_at": {
+            "type": "string",
+            "title": "Executed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "dedupe_key",
+          "run_key",
+          "executed_at"
+        ],
+        "title": "TriggerBacktestResponse"
       },
       "TriggerPipelineRequest": {
         "properties": {
