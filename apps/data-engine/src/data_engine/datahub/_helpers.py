@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from factors.confidence import evaluate_cell_confidence
+from factors.confidence import evaluate_cell_confidence, sanitize_stable_id
 from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.metrics import is_registered_input_key
 
@@ -66,8 +66,8 @@ def single_origin_confidence(
         case_id=case_id,
         sources=(
             SourceConfidenceEvidence(
-                provider_id=provider_id,
-                origin_group_id=origin_group,
+                provider_id=sanitize_stable_id(provider_id, fallback="provider"),
+                origin_group_id=sanitize_stable_id(origin_group, fallback="lineage"),
                 independence_weight=Decimal("1"),
                 reliability_prior=prior,
                 successful_outcome_mass=Decimal("0"),
@@ -75,7 +75,7 @@ def single_origin_confidence(
                 freshness=freshness,
                 sample_conformance=sample_conformance,
                 transport_integrity=Decimal("1"),
-                evidence_ids=(evidence_id,),
+                evidence_ids=(sanitize_stable_id(evidence_id, fallback="evidence"),),
                 reason_codes=reason_codes,
             ),
         ),

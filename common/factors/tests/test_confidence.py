@@ -182,3 +182,30 @@ def test_theme_purity_allocates_small_eliminations_pro_rata_and_refuses_large() 
     assert large_elim.result.value is None
     assert large_elim.result.confidence == Decimal("0")
     assert "elimination_not_allocated" in large_elim.result.flags
+
+
+def test_evaluate_cell_confidence_sanitizes_whitespace_case_ids_while_preserving_valid_ids() -> None:
+    """Theme names with whitespace must normalize without failing ``StableId`` validation."""
+    src = _prior_source("origin:sec-company-facts:v1", "lineage:sec-company-facts", Decimal("0.98"))
+    theme_cell = evaluate_cell_confidence(
+        case_id="theme:AI infrastructure:company:cik:59478:000005947826000013",
+        sources=(src,),
+    )
+    assert theme_cell.evaluation is not None
+    assert theme_cell.evaluation.confidence == theme_cell.confidence
+    assert " " not in theme_cell.input_id
+
+    valid_direct = ContinuousConfidenceInput(
+        case_id="segment:company:cik:1045810:acc-1",
+        sources=(src,),
+        agreement="1",
+        semantic_mapping_quality="1",
+        lineage_completeness="1",
+        required_component_completeness="1",
+    )
+    valid_via_cell = evaluate_cell_confidence(
+        case_id="segment:company:cik:1045810:acc-1",
+        sources=(src,),
+    )
+    assert valid_via_cell.input_id == valid_direct.input_id
+    assert valid_via_cell.input_hash == valid_direct.content_sha256

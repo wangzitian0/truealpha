@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,6 +19,18 @@ from truealpha_contracts.confidence import (
 )
 
 DEFAULT_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
+_INVALID_STABLE_ID_CHARS = re.compile(r"[^A-Za-z0-9._:/@+\-]+")
+
+
+def sanitize_stable_id(value: str, *, fallback: str = "case") -> str:
+    """Normalize free-text identifiers into valid ``StableId`` tokens."""
+    cleaned = _INVALID_STABLE_ID_CHARS.sub("_", value.strip())
+    if not cleaned:
+        return fallback
+    if not cleaned[0].isalnum():
+        stripped = cleaned.lstrip("._:/@+-")
+        return stripped if stripped and stripped[0].isalnum() else f"{fallback}:{cleaned}"
+    return cleaned
 
 
 @dataclass(frozen=True)
@@ -188,8 +201,9 @@ def evaluate_cell_confidence(
     extra_reason_codes: Sequence[str] = (),
     policy: ContinuousConfidencePolicy = DEFAULT_CONFIDENCE_POLICY,
 ) -> CellConfidence:
+    normalized_case_id = sanitize_stable_id(case_id)
     if definitional or not has_value or not sources:
-        payload: dict[str, object] = {"case_id": case_id, "definitional": definitional}
+        payload: dict[str, object] = {"case_id": normalized_case_id, "definitional": definitional}
         if not definitional:
             payload["has_value"] = False
         return _static_cell_confidence(
@@ -200,7 +214,7 @@ def evaluate_cell_confidence(
             payload=payload,
         )
     evidence = ContinuousConfidenceInput(
-        case_id=case_id,
+        case_id=normalized_case_id,
         sources=tuple(sources),
         agreement=agreement,
         semantic_mapping_quality=semantic_mapping_quality,
