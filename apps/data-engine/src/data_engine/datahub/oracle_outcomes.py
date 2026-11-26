@@ -426,7 +426,7 @@ def known_answer_outcomes(
     outcomes: list[Outcome] = []
     for answer in catalog.answers:
         canonical_field = canonical_metric(answer.metric)
-        if canonical_field not in METRICS:
+        if canonical_field not in METRICS and canonical_field != "operating_branch":
             continue
         issuer_id = (
             issuers_by_ticker.get(answer.ticker.upper())
@@ -437,6 +437,57 @@ def known_answer_outcomes(
             continue
         target_subject_id = issuer_id or answer.issuer_id
         fi = _first_match(by_issuer_input, target_subject_id, answer.issuer_id, f"issuer:cik:{answer.cik}")
+        if canonical_field == "operating_branch":
+            fin_entry = _first_match(fin_by_issuer, target_subject_id, answer.issuer_id, answer.cik)
+            actual_branch: str | None = None
+            obs_id: str | None = None
+            know_at: datetime | None = None
+            if fin_entry is not None:
+                obs_id, know_at, payload = fin_entry
+                raw_branch = payload.get("operating_branch")
+                actual_branch = str(raw_branch).strip() if raw_branch else None
+            if actual_branch is None and fi is not None:
+                actual_branch = fi.operating_branch.value
+                obs_id = obs_id or (fi.observation_ids[0] if fi.observation_ids else None)
+                know_at = know_at or cutoff
+            if actual_branch is None or obs_id is None or know_at is None:
+                outcomes.append(
+                    Outcome(
+                        target_subject_id,
+                        canonical_field,
+                        FILING_KIND,
+                        answer.period_end,
+                        None,
+                        Decimal("1"),
+                        answer.accession or FILING_SOURCE,
+                        None if (obs_id is None or know_at is None) else obs_id,
+                        None if (obs_id is None or know_at is None) else know_at,
+                        None,
+                        Decimal("0"),
+                        NOT_COMPARABLE,
+                        NO_SERVED_VALUE if actual_branch is None else NO_OBSERVATION,
+                    )
+                )
+            else:
+                matched = actual_branch == answer.expected_value
+                outcomes.append(
+                    Outcome(
+                        target_subject_id,
+                        canonical_field,
+                        FILING_KIND,
+                        answer.period_end,
+                        Decimal("1") if matched else Decimal("0"),
+                        Decimal("1"),
+                        answer.accession or FILING_SOURCE,
+                        obs_id,
+                        know_at,
+                        Decimal("1") if matched else Decimal("0"),
+                        Decimal("0"),
+                        AGREE if matched else DISAGREE,
+                        None if matched else f"branch_mismatch:{actual_branch}",
+                    )
+                )
+            continue
         if canonical_field == "gross_profit_per_employee":
             gppe_entry = _first_match(gppe_by_issuer, target_subject_id, answer.issuer_id, answer.cik)
             if gppe_entry is not None:
@@ -471,6 +522,115 @@ def known_answer_outcomes(
                 observation_id=obs_id,
                 knowable_at=know_at,
                 policy_tolerance=policy_tolerance,
+            )
+        )
+    outcomes.extend(
+        _negative_theme_outcomes(
+            connection,
+            run_id,
+            cutoff,
+            catalog,
+            issuers_by_ticker=issuers_by_ticker,
+            all_run_issuers=all_run_issuers,
+            all_run_ciks=all_run_ciks,
+        )
+    )
+    return outcomes
+
+
+def _negative_theme_outcomes(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    cutoff: datetime,
+    catalog: Any,
+    *,
+    issuers_by_ticker: Mapping[str, str],
+    all_run_issuers: set[str],
+    all_run_ciks: set[str],
+) -> list[Outcome]:
+    if not hasattr(connection, "execute"):
+        return []
+    cursor = connection.execute(
+        """
+        select issuer_id, cik, theme_id, theme_share, partition_id, period_end, cutoff
+        from mart.issuer_theme_purity
+        where run_id = %s and partition_id is not null
+        """,
+        (run_id,),
+    )
+    rows = cursor.fetchall() if cursor is not None else ()
+    if not rows:
+        return []
+    by_subject_theme: dict[tuple[str, str], tuple[Decimal | None, str, str | None, datetime]] = {}
+    for iss_id, cik_val, theme_id, theme_share, part_id, period_end, row_cutoff in rows:
+        entry = (
+            None if theme_share is None else Decimal(str(theme_share)),
+            str(part_id),
+            period_end.isoformat() if hasattr(period_end, "isoformat") else (str(period_end) if period_end else None),
+            row_cutoff or cutoff,
+        )
+        tid = str(theme_id)
+        for key in _cik_keys(iss_id):
+            by_subject_theme[(key, tid)] = entry
+        if cik_val is not None:
+            padded = f"{int(cik_val):010d}"
+            by_subject_theme[(padded, tid)] = entry
+            by_subject_theme[(f"issuer:cik:{padded}", tid)] = entry
+    outcomes: list[Outcome] = []
+    for neg in catalog.negative_theme_classifications:
+        issuer_id = (
+            issuers_by_ticker.get(str(neg.ticker).upper())
+            or (neg.issuer_id if neg.issuer_id in all_run_issuers else None)
+            or (f"issuer:cik:{neg.cik}" if f"issuer:cik:{neg.cik}" in all_run_issuers else None)
+        )
+        if issuer_id is None and neg.cik not in all_run_ciks:
+            continue
+        target_subject = issuer_id or str(neg.issuer_id)
+        match = (
+            by_subject_theme.get((target_subject, str(neg.theme_key)))
+            or by_subject_theme.get((str(neg.issuer_id), str(neg.theme_key)))
+            or by_subject_theme.get((str(neg.cik), str(neg.theme_key)))
+        )
+        if match is None:
+            continue
+        served_share, part_id, _period_str, know_at = match
+        max_share = Decimal(str(neg.max_theme_share))
+        field_name = f"negative_theme:{neg.theme_key}"
+        if served_share is None:
+            outcomes.append(
+                Outcome(
+                    target_subject,
+                    field_name,
+                    FILING_KIND,
+                    str(neg.period_end),
+                    None,
+                    max_share,
+                    str(neg.accession or FILING_SOURCE),
+                    part_id,
+                    know_at,
+                    None,
+                    Decimal("0"),
+                    NOT_COMPARABLE,
+                    NO_SERVED_VALUE,
+                )
+            )
+            continue
+        matched = served_share <= max_share
+        outcomes.append(
+            Outcome(
+                target_subject,
+                field_name,
+                FILING_KIND,
+                str(neg.period_end),
+                served_share,
+                max_share,
+                str(neg.accession or FILING_SOURCE),
+                part_id,
+                know_at,
+                Decimal("0") if matched else served_share,
+                max_share,
+                AGREE if matched else DISAGREE,
+                None if matched else f"theme_share_exceeded:{served_share}>{max_share}",
             )
         )
     return outcomes
@@ -620,7 +780,13 @@ _SOURCE_SUBSTRING_ORIGINS = (
 
 def _resolve_row_origin_id(row: Mapping[str, Any]) -> str | None:
     oracle_kind = str(row.get("oracle_kind") or "")
-    if oracle_kind == "operator" or canonical_metric(str(row.get("field") or "")) == "gross_profit_per_employee":
+    raw_field = str(row.get("field") or "")
+    if (
+        oracle_kind == "operator"
+        or canonical_metric(raw_field) == "gross_profit_per_employee"
+        or raw_field == "operating_branch"
+        or raw_field.startswith("negative_theme:")
+    ):
         return None
     for key in ("origin_id", "lineage", "origin"):
         if isinstance(explicit := row.get(key), str) and explicit.startswith("origin:"):

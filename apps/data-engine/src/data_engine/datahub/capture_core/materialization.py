@@ -1046,6 +1046,8 @@ class PostgresCoreRepository:
                 metric="gppe",
                 universe_id=snapshot.universe_id,
             )
+            from factors.panel import EXPR_PRICE_TO_GROSS_PROFIT, EXPR_PRICE_TO_SALES
+
             materialize_metric_node_values(
                 self._connection,
                 factor_inputs=factor_inputs,
@@ -1053,6 +1055,10 @@ class PostgresCoreRepository:
                 tier_definition_id=definition.strategy_definition_id,
                 periods_by_listing=periods_by_listing,
                 evidence_by_listing=evidence_by_listing,
+                extra_expressions={
+                    "price_to_sales": EXPR_PRICE_TO_SALES,
+                    "price_to_gross_profit": EXPR_PRICE_TO_GROSS_PROFIT,
+                },
                 not_applicable_issuers=not_applicable_issuers,
             )
         return factor_inputs
