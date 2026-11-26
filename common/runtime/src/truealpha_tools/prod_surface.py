@@ -21,7 +21,11 @@ def default_http_get(*, timeout: float = 15.0) -> HttpGet:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(f"unsupported URL scheme: {parsed.scheme!r}")
-        req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json, text/html"})
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={"Accept": "application/json, text/html", "User-Agent": "truealpha-ops-audit/1.0"},
+        )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
                 return int(resp.status), resp.read().decode("utf-8", errors="replace")
