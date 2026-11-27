@@ -341,3 +341,39 @@ def test_backtest_trigger_cli_uses_shared_contract(
     assert payload["request_id"] == 99 and payload["dedupe_key"] == "cli-bt-1"
     assert payload["release_manifest_id"] == "release-manifest:cli-1" and payload["exploratory"] is False
     assert seen and "staging.pipeline_trigger_requests" in seen[0]
+
+
+def test_fetch_issuer_basic_info_falls_back_to_cik_when_duplicate_uuid_is_deduplicated() -> None:
+    seen: list[tuple[str, Any]] = []
+
+    class _FakeCur:
+        def execute(self, sql: str, params: Any = None) -> None:
+            seen.append((sql, params))
+
+        def fetchone(self) -> dict[str, Any]:
+            return {
+                "canonical_name": "Exxon Mobil Corp.",
+                "primary_ticker": "XOM",
+                "primary_exchange": "NYSE",
+                "cik": "0002115436",
+                "sic": "2911",
+                "sic_description": "Petroleum Refining",
+                "sector_gics_or_sic": "Petroleum Refining",
+                "fiscal_year_end": "1231",
+                "state_of_incorporation": "NJ",
+                "entity_type": "operating",
+                "market_cap": "644843483947.52",
+                "market_cap_confidence": "0.80",
+                "shares_outstanding": "4079222444",
+                "close_price": "158.08",
+                "as_of_cutoff": "2026-11-26",
+            }
+
+    assert entities_service._extract_cik_candidates(
+        ["720a8508-ada0-50ba-bfeb-0d563cae8dbb", "issuer:cik:0002115436", "company:cik:2115436"]
+    ) == ["0002115436"]
+    dto = entities_service._fetch_issuer_basic_info_from_cursor(
+        _FakeCur(), ["720a8508-ada0-50ba-bfeb-0d563cae8dbb", "issuer:cik:0002115436"]
+    )
+    assert dto is not None and dto.primary_ticker == "XOM" and dto.cik == "0002115436"
+    assert "cik = any" in seen[0][0] and seen[0][1][1] == ["0002115436"]

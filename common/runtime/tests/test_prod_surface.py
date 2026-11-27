@@ -165,3 +165,41 @@ def test_prod_surface_default_urllib_follows_root_redirect_to_login() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_prod_surface_sends_audit_user_agent() -> None:
+    seen: list[tuple[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_: object) -> None:
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            seen.append((self.path, self.headers.get("User-Agent", "")))
+            if self.path == "/api/health":
+                body = _healthy_payload(version="v0.3.17", git_sha="v0.3.17", data_engine_git_sha="v0.3.17").encode(
+                    "utf-8"
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            body = b"<html>ok</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        rc_ps = main(["--app-url", f"http://127.0.0.1:{server.server_port}", "--version-ref", "v0.3.17"])
+        assert rc_ps == 0
+        assert seen
+        assert all(ua == "truealpha-ops-audit/1.0" for _, ua in seen)
+    finally:
+        server.shutdown()
+        server.server_close()

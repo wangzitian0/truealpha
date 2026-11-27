@@ -554,7 +554,37 @@ def get_trace(
     )
 
 
+def _extract_cik_candidates(candidates: list[str]) -> list[str]:
+    out: list[str] = []
+    for raw in candidates:
+        parts = str(raw).strip().lower().split(":")
+        if len(parts) >= 2 and parts[-2] == "cik" and parts[-1].isdigit():
+            val = parts[-1].zfill(10)
+            if val not in out:
+                out.append(val)
+    return out
+
+
+_ISSUER_BASIC_INFO_SQL = """
+select canonical_name, primary_ticker, primary_exchange, cik, sic,
+       sic_description, sector_gics_or_sic, fiscal_year_end,
+       state_of_incorporation, entity_type,
+       market_cap::text as market_cap,
+       market_cap_confidence::text as market_cap_confidence,
+       shares_outstanding::text as shares_outstanding,
+       close_price::text as close_price,
+       as_of_cutoff
+from mart.issuer_basic_info
+where issuer_id = any(%s::text[])
+   or (cardinality(%s::text[]) > 0 and cik = any(%s::text[]))
+order by (issuer_id = any(%s::text[])) desc, (market_cap is not null) desc
+limit 1
+"""
+
+
 def _fetch_issuer_basic_info_from_cursor(cur: Any, candidates: list[str]) -> IssuerBasicInfoDto | None:
+    cik_candidates = _extract_cik_candidates(candidates)
+    params = (candidates, cik_candidates, cik_candidates, candidates)
     tx = getattr(getattr(cur, "connection", None), "transaction", None)
     try:
         if callable(tx):
@@ -563,42 +593,10 @@ def _fetch_issuer_basic_info_from_cursor(cur: Any, candidates: list[str]) -> Iss
                 reg_row = cur.fetchone()
                 if reg_row is not None and reg_row.get("reg") is None:
                     return None
-                cur.execute(
-                    """
-                    select canonical_name, primary_ticker, primary_exchange, cik, sic,
-                           sic_description, sector_gics_or_sic, fiscal_year_end,
-                           state_of_incorporation, entity_type,
-                           market_cap::text as market_cap,
-                           market_cap_confidence::text as market_cap_confidence,
-                           shares_outstanding::text as shares_outstanding,
-                           close_price::text as close_price,
-                           as_of_cutoff
-                    from mart.issuer_basic_info
-                    where issuer_id = any(%s::text[])
-                    order by (market_cap is not null) desc
-                    limit 1
-                    """,
-                    (candidates,),
-                )
+                cur.execute(_ISSUER_BASIC_INFO_SQL, params)
                 row = cur.fetchone()
         else:
-            cur.execute(
-                """
-                select canonical_name, primary_ticker, primary_exchange, cik, sic,
-                       sic_description, sector_gics_or_sic, fiscal_year_end,
-                       state_of_incorporation, entity_type,
-                       market_cap::text as market_cap,
-                       market_cap_confidence::text as market_cap_confidence,
-                       shares_outstanding::text as shares_outstanding,
-                       close_price::text as close_price,
-                       as_of_cutoff
-                from mart.issuer_basic_info
-                where issuer_id = any(%s::text[])
-                order by (market_cap is not null) desc
-                limit 1
-                """,
-                (candidates,),
-            )
+            cur.execute(_ISSUER_BASIC_INFO_SQL, params)
             row = cur.fetchone()
     except psycopg.Error as exc:
         logging.getLogger(__name__).warning("issuer_basic_info lookup failed: %s", exc)
