@@ -36,7 +36,7 @@ class Expectation:
     check: str
     cadence_hours: float
     job: str
-    kind: str = "hard"
+    kind: str = "fact"
 
     @property
     def max_age_hours(self) -> float:
@@ -59,9 +59,12 @@ class HealthReport:
 
 
 def _parse_kind(value: object, check: str) -> str:
-    kind = str(value or "hard")
-    if kind not in ("hard", "fact"):
-        raise VerdictCheckFailure(f"{check}: invalid verdict kind {kind!r}; expected 'hard' or 'fact'")
+    kind = str(value or "fact")
+    if kind == "hard":
+        # Legacy manifests released before v0.3.11 declared "hard"; normalize to "fact".
+        return "fact"
+    if kind != "fact":
+        raise VerdictCheckFailure(f"{check}: invalid verdict kind {kind!r}; expected 'fact'")
     return kind
 
 
@@ -74,7 +77,7 @@ def parse_expectations(text: str, lanes: Sequence[str] = ()) -> dict[str, Expect
             name,
             float(entry["cadence_hours"]),
             str(entry.get("job", "")),
-            _parse_kind(entry.get("kind", "hard"), name),
+            _parse_kind(entry.get("kind", "fact"), name),
         )
         for name, entry in entries.items()
     }
@@ -325,13 +328,8 @@ def judge(
         elif not verdict.ok:
             if age > expectation.max_age_hours:
                 failures.append(_stale_message(name, verdict, age, expectation))
-            elif expectation.kind == "fact":
-                if facts is not None:
-                    facts.append(
-                        f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}"
-                    )
-            else:
-                failures.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
+            elif facts is not None:
+                facts.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
         elif age > expectation.max_age_hours:
             failures.append(_stale_message(name, verdict, age, expectation))
     return failures
@@ -401,9 +399,7 @@ def check_nightly_verdicts(
         print(f"({len(failures)} of {len(expectations)} expected checks; expectations {source})", file=sys.stderr)
         return 1
     fact_suffix = f" ({len(facts)} fact observation(s) logged)" if facts else ""
-    print(
-        f"{name}: all {len(expectations)} nightly checks are on time and hard gates are green{fact_suffix} ({source})"
-    )
+    print(f"{name}: all {len(expectations)} nightly checks are on time{fact_suffix} ({source})")
     return 0
 
 

@@ -64,24 +64,6 @@ def test_every_check_green_and_on_time_passes(capsys: pytest.CaptureFixture[str]
     assert "all " in capsys.readouterr().out
 
 
-def _hard_set(_ref: str) -> str:
-    """Synthetic expectations marking `job_run_health` as kind='hard' to keep hard-verdict fail-closed coverage."""
-    data = json.loads(_module.EXPECTATIONS_PATH.read_text(encoding="utf-8"))
-    data["checks"]["job_run_health"]["kind"] = "hard"
-    return json.dumps(data)
-
-
-def test_a_red_hard_verdict_fails_and_names_the_check_and_its_summary(capsys: pytest.CaptureFixture[str]) -> None:
-    """Hard checks fail closed on a red verdict and name only the failing check."""
-    verdicts = _all_green()
-    verdicts = [v for v in verdicts if v["check"] != "job_run_health"]
-    verdicts.append(_verdict("job_run_health", 1.0, ok=False, summary="failed: 2 scheduled failures"))
-    assert _run(verdicts, reader=_hard_set) == 1
-    err = capsys.readouterr().err
-    assert "job_run_health" in err and "2 scheduled failures" in err
-    assert "model_key_health" not in err
-
-
 @pytest.mark.parametrize(
     "fact_check",
     [
@@ -115,6 +97,20 @@ def test_a_red_but_stale_fact_verdict_fails_for_staleness(capsys: pytest.Capture
     verdicts.append(_verdict("model_key_health", limit + 1, ok=False, summary="stale red"))
     assert _run(verdicts) == 1
     assert "stopped ticking" in capsys.readouterr().err
+
+
+def test_legacy_pre_v0311_hard_kind_is_normalized_to_fact(capsys: pytest.CaptureFixture[str]) -> None:
+    """Historical releases (< v0.3.11) still have kind='hard' in git show <release>:tools/nightly_verdicts.json."""
+
+    def _legacy_manifest(_ref: str) -> str:
+        data = json.loads(_module.EXPECTATIONS_PATH.read_text(encoding="utf-8"))
+        data["checks"]["job_run_health"]["kind"] = "hard"
+        return json.dumps(data)
+
+    verdicts = [v for v in _all_green() if v["check"] != "job_run_health"]
+    verdicts.append(_verdict("job_run_health", 1.0, ok=False, summary="failed: 1 failure"))
+    assert _run(verdicts, reader=_legacy_manifest) == 0
+    assert "fact: job_run_health: red since" in capsys.readouterr().out
 
 
 def test_invalid_verdict_kind_is_refused() -> None:
@@ -721,20 +717,8 @@ def test_an_unknown_first_declaration_gives_no_grace(capsys: pytest.CaptureFixtu
 
 
 def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
-    """Pending is for a check with NO row; a hard check that failed, or any check that went quiet, is judged."""
+    """Pending is for a check with NO row; a fact check that went quiet or stale fails on age."""
     recent = lambda _check, _release: NOW - timedelta(minutes=5)  # noqa: E731
-    hard_check = "job_run_health"
-    base_hard = [entry for entry in _all_green() if entry["check"] != hard_check]
-    assert (
-        _run(
-            [*base_hard, _verdict(hard_check, 1, ok=False, summary="failed: x")],
-            first_declared=recent,
-            reader=_hard_set,
-        )
-        == 1
-    )
-    assert _run([*base_hard, _verdict(hard_check, 60)], first_declared=recent, reader=_hard_set) == 1
-
     fact_check = "theme_purity@topt"
     base_fact = [entry for entry in _all_green() if entry["check"] != fact_check]
     assert _run([*base_fact, _verdict(fact_check, 1, ok=False, summary="failed: x")], first_declared=recent) == 0
@@ -1018,63 +1002,8 @@ def test_the_surface_proof_fails_closed_when_the_served_head_is_unreadable(monke
     assert recorded[-1]["ok"] is False
 
 
-def test_vision_audit_evaluates_all_30_criteria_and_separates_live_health_from_partial(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Honest metrics (#1747): vision_audit prints all 30 criteria, flags stale verdicts, and keeps partial unverified."""
-    from datetime import timedelta
-
-    from truealpha_tools import vision_audit
-    from truealpha_tools.nightly_verdicts import HealthReport, Verdict
-
-    now = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
-    stale_verdict = Verdict("output_invariants", now - timedelta(hours=72), True, "stale")
-    fresh_verdicts = [
-        Verdict(name, now - timedelta(hours=1), True, "ok") if name != "output_invariants" else stale_verdict
-        for name in EXPECTED
-        if "@" not in name or name.endswith(("@topt", "@universe-list:qqq", "@universe-list:sp500"))
-    ]
-    health = HealthReport(
-        verdicts=fresh_verdicts,
-        release="v1",
-        governed_pointers=[
-            {"universe_id": "universe:topt-us-2026-06-30", "freshness": "fresh", "availability": "available"},
-            {"universe_id": "universe:qqq-us-2026-06-30", "freshness": "fresh", "availability": "available"},
-            {"universe_id": "universe:sp500-us-2026-06-30", "freshness": "fresh", "availability": "available"},
-        ],
-    )
-    monkeypatch.setenv("TRUEALPHA_DOMAIN", "example.test")
-    monkeypatch.setattr(vision_audit, "read_report", lambda *_a, **_k: health)
-    report = vision_audit.audit_vision(env="staging", now=now)
-    assert report.criteria_summary["total"] == 30
-    assert report.criteria_summary["partial"] > 0
-    assert report.criteria_summary["failed_or_stale"] > 0
-    assert report.live_health_ok is True
-    assert report.all_passed is False
-    by_id = {c.criterion_id: c for c in report.criteria}
-    assert any("STALE" in c.evidence for c in by_id.values())
-    assert by_id["R3.C1"].verified is False
-
-
-def test_vision_audit_staging_health_url_and_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nightly_verdicts_default_http_get_sends_ops_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     import urllib.request
-
-    from truealpha_tools import vision_audit
-
-    monkeypatch.delenv("TRUEALPHA_BASE_URL", raising=False)
-    monkeypatch.delenv("TRUEALPHA_DOMAIN", raising=False)
-    with pytest.raises(ValueError, match="TRUEALPHA_BASE_URL"):
-        vision_audit._health_url_for("staging")
-
-    monkeypatch.setenv("TRUEALPHA_DOMAIN", "example.test")
-    assert vision_audit._health_url_for("staging") == "https://truealpha-staging.example.test/api/health"
-    assert vision_audit._health_url_for("prod") == "https://example.test/api/health"
-    assert (
-        vision_audit._health_url_for("staging", base_url="http://localhost:8000/") == "http://localhost:8000/api/health"
-    )
-
-    monkeypatch.setenv("TRUEALPHA_BASE_URL", "https://staging.custom.test/")
-    assert vision_audit._health_url_for("staging") == "https://staging.custom.test/api/health"
 
     captured_headers: list[dict[str, str]] = []
 
@@ -1096,9 +1025,6 @@ def test_vision_audit_staging_health_url_and_user_agent(monkeypatch: pytest.Monk
         return _Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-    status, body = vision_audit._http_get("https://truealpha-staging.example.test/api/health")
-    assert status == 200 and "ok" in body
-    assert captured_headers[0]["user-agent"] == "truealpha-ops-audit/1.0"
     nv_status, nv_body = _module._default_http_get("https://truealpha-staging.example.test/api/health")
     assert nv_status == 200 and "ok" in nv_body
-    assert captured_headers[1]["user-agent"] == "truealpha-ops-audit/1.0"
+    assert captured_headers[0]["user-agent"] == "truealpha-ops-audit/1.0"

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { api } from "@/client/api";
 import { formatCell, formatCompactUtc, formatRatio, formatShortSha } from "@/client/format";
 import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-state";

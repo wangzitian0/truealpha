@@ -19,7 +19,6 @@ DEPLOYED_SRC_ROOTS = (
 )
 
 
-@pytest.mark.criterion("R5.E2")
 def test_no_deployed_source_tree_contains_a_fixture_module() -> None:
     offenders = [
         str(path.relative_to(REPO))

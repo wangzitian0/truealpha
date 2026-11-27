@@ -139,16 +139,16 @@ def test_coverage_can_be_required_where_the_data_is_real(
     assert "examined 0 rows where real data was required" in capsys.readouterr().err
 
 
-def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.CaptureFixture[str]) -> None:
-    """Structural/conservation invariants are `hard`; observational invariants are `fact` and `--persist` writes all rows."""
-    hard_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "hard"}
+def test_critical_vs_fact_invariant_classification_and_persistence(capsys: pytest.CaptureFixture[str]) -> None:
+    """Structural/conservation invariants are `critical`; observational invariants are `fact` and `--persist` writes all rows."""
+    critical_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "critical"}
     fact_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "fact"}
     assert {
         "selected-weights-close",
         "entity-identity-unique-per-entity",
         "listing-names-one-issuer-and-one-instrument",
         "fund-virtual-company-weights-conserved",
-    } <= hard_ids
+    } <= critical_ids
     assert "ledger-runs-in-dagster" in fact_ids
 
     recorded: list[tuple[str, tuple]] = []
@@ -191,7 +191,9 @@ def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.Ca
         def __exit__(self, *_: object) -> None:
             return None
 
-    hard_inv = Invariant(id="hard-check", kind="hard", claim="hard must hold", violations="VH", population="PH")
+    critical_inv = Invariant(
+        id="critical-check", kind="critical", claim="critical must hold", violations="VH", population="PH"
+    )
     fact_inv = Invariant(id="fact-check", kind="fact", claim="fact is observed", violations="VF", population="PF")
     answers = {"VH": [], "PH": [(5,)], "VF": [("row-1", "bad-val")], "PF": [(5,)]}
     conn_fact_only = _PersistConn(answers)
@@ -200,7 +202,7 @@ def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.Ca
     code_fact = check(
         "postgresql://unused",
         require_coverage=True,
-        invariants=(hard_inv, fact_inv),
+        invariants=(critical_inv, fact_inv),
         connect=lambda _url: conn_fact_only,
         persist=True,
         dagster_run_id="run-wave4",
@@ -211,24 +213,24 @@ def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.Ca
     out = capsys.readouterr().out
     assert "FACT     fact-check: 1 violation(s)" in out
     assert [(p[2], p[3], p[4], p[5]) for _, p in recorded] == [
-        ("hard-check", "hard", 5, 0),
+        ("critical-check", "critical", 5, 0),
         ("fact-check", "fact", 5, 1),
     ]
     assert json.loads(recorded[1][1][7]) == [["row-1", "bad-val"]]
 
     answers["VH"] = [("row-h",)]
     recorded.clear()
-    code_hard = check(
+    code_critical = check(
         "postgresql://unused",
         require_coverage=True,
-        invariants=(hard_inv, fact_inv),
+        invariants=(critical_inv, fact_inv),
         connect=lambda _url: _PersistConn(answers),
         persist=True,
-        dagster_run_id="run-wave4-hard",
+        dagster_run_id="run-wave4-critical",
         checked_at=checked_at,
     )
-    assert code_hard == 1
-    assert [(p[2], p[3], p[5]) for _, p in recorded] == [("hard-check", "hard", 1), ("fact-check", "fact", 1)]
+    assert code_critical == 1
+    assert [(p[2], p[3], p[5]) for _, p in recorded] == [("critical-check", "critical", 1), ("fact-check", "fact", 1)]
 
 
 # --- revenue-period-is-recent on a migrated database (#1457) -------------------------------
@@ -1092,10 +1094,10 @@ def test_fund_virtual_company_weights_conserved_passes_valid_row_and_fails_on_fa
     assert failing == 1
 
 
-def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
+def test_persist_records_critical_and_fact_invariants_and_only_critical_fails(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Persist both hard and fact results into mart.output_invariant_results inside a transaction."""
+    """Persist both critical and fact results into mart.output_invariant_results inside a transaction."""
     from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
 
     run_id = _seed_head(
@@ -1144,7 +1146,9 @@ def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
     assert set(by_fact) == {REASON_INVARIANT, ENTITY_IDENTITY_UNIQUE_INVARIANT}
     assert by_fact[REASON_INVARIANT][0] == "fact" and by_fact[REASON_INVARIANT][2] == 1
     assert len(by_fact[REASON_INVARIANT][4]) == 1
-    assert by_fact[ENTITY_IDENTITY_UNIQUE_INVARIANT][0] == "hard" and by_fact[ENTITY_IDENTITY_UNIQUE_INVARIANT][2] == 0
+    assert (
+        by_fact[ENTITY_IDENTITY_UNIQUE_INVARIANT][0] == "critical" and by_fact[ENTITY_IDENTITY_UNIQUE_INVARIANT][2] == 0
+    )
 
     def mint(kind: str, scheme: str, value: str) -> uuid.UUID:
         return conn.execute("select staging.entity_mint(%s, %s, %s, 'test')", (kind, scheme, value)).fetchone()[0]
@@ -1180,7 +1184,7 @@ def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
     by_hard = {row[0]: row[1:] for row in rows_hard}
     assert set(by_hard) == {REASON_INVARIANT, LISTING_INVARIANT}
     assert by_hard[REASON_INVARIANT][0] == "fact" and by_hard[REASON_INVARIANT][2] == 1
-    assert by_hard[LISTING_INVARIANT][0] == "hard" and by_hard[LISTING_INVARIANT][2] == 1
+    assert by_hard[LISTING_INVARIANT][0] == "critical" and by_hard[LISTING_INVARIANT][2] == 1
     assert len(by_hard[LISTING_INVARIANT][4]) == 1
 
 

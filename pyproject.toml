@@ -68,7 +68,6 @@ testpaths = [
     "common/runtime/tests",
 ]
 markers = [
-    "criterion(id): the test backs this goal-criteria catalog id (common/contracts/src/truealpha_contracts/data/goal_criteria.v1.json, #28 D1)",
     "gate: Class 1 hard merge, security, or boundary gate",
     "deps: Class 2 real external dependency test (Postgres, S3, migrations, roles)",
     "smoke: Class 2 live runtime, HTTP, MCP, or container smoke test",

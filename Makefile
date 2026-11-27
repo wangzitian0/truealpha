@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke vendor-smoke smoke-deps lint format typecheck-python typecheck-web test-python test-web contract-conformance check clean vision-audit
+.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke vendor-smoke smoke-deps lint format typecheck-python typecheck-web test-python test-web contract-conformance check clean
 
 COMPOSE ?= podman compose
 
@@ -22,7 +22,6 @@ help:
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo "  make vendor-smoke   Live vendor contract smoke (ARGS=... for flags)"
 	@echo "  make smoke-deps     Run gate, dependency, smoke, and contract Python tests"
-	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
 	@echo "Before a PR (Local pre cell, 30 seconds):"
 	@echo "  make check FILES=<test paths>  static checks on the changed files + the named tests"
@@ -122,9 +121,6 @@ vendor-smoke:
 
 smoke-deps:
 	uv run pytest -m "gate or deps or smoke or contract"
-
-vision-audit:
-	uv run python -m truealpha_tools.vision_audit $(ARGS)
 
 lint:
 	uv run ruff check apps common

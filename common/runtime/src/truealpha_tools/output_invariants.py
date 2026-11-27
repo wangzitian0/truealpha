@@ -100,14 +100,14 @@ class Invariant:
     violations: str
     population: str
     signals: str | None = None
-    kind: Literal["hard", "fact"] = "hard"
+    kind: Literal["critical", "fact"] = "critical"
     requires_table: str | None = None
 
 
 @dataclass(frozen=True)
 class InvariantResult:
     invariant_id: str
-    kind: Literal["hard", "fact"]
+    kind: Literal["critical", "fact"]
     population: int
     violation_count: int
     deferred: bool = False
@@ -313,7 +313,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="selected-weights-close",
-        kind="hard",
+        kind="critical",
         claim="the selected positions of a strategy run sum to a whole portfolio",
         violations=f"""
             select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected
@@ -569,7 +569,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="entity-identity-unique-per-entity",
-        kind="hard",
+        kind="critical",
         claim="mart.entity_identity returns at most one row per entity_id — duplicate rows fan out every downstream join (#1641)",
         violations="""
             select entity_id::text, count(*)::text as row_count
@@ -582,7 +582,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="listing-names-one-issuer-and-one-instrument",
-        kind="hard",
+        kind="critical",
         claim=(
             "a listing has one instrument and one issuer — two universes that spell one listing in "
             "two ways resolve to the same entities, or a run of one refuses the rows of the other (#1798)"
@@ -628,7 +628,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="fund-virtual-company-weights-conserved",
-        kind="hard",
+        kind="critical",
         claim="every mart.fund_virtual_company row conserves portfolio weight (0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105) (#1641)",
         violations="""
             select run_id, fund_id, total_weight_pct::text, resolved_weight_pct::text, valued_weight_pct::text
@@ -828,7 +828,7 @@ def check(
             results.append(
                 InvariantResult(
                     invariant_id=invariant.id,
-                    kind="hard",
+                    kind="critical",
                     population=population,
                     violation_count=len(violations),
                     sample_rows=samples,

@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from truealpha_contracts.confidence import wilson_95_upper_bound
 from truealpha_contracts.confidence_bands import confidence_band, confidence_band_thresholds
 from truealpha_contracts.environment_contract import UTILIZATION_CEILING, load_environment_contract
-from truealpha_contracts.goal_criteria import load_goal_criteria
 from truealpha_contracts.universes import id_prefix_like, job_name
 from truealpha_runtime.checks import ObjectStorageCheck
 
@@ -247,90 +246,6 @@ class OpsDataEngineBuildDto(BaseModel):
     created_at: str
 
 
-STRATEGY_RUN_COUNTS_SQL = """
-  with latest as (
-    select distinct on (strategy_key)
-      strategy_run_id, strategy_key,
-      to_char(executed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as executed_at
-    from mart.strategy_runs
-    order by strategy_key, executed_at desc, created_at desc, strategy_run_id desc
-  )
-  select l.strategy_key, l.strategy_run_id, l.executed_at,
-         count(d.strategy_decision_id)::int as total_count,
-         (count(*) filter (where d.eligible))::int as eligible_count,
-         (count(*) filter (where d.outcome = 'selected'))::int as selected_count
-  from latest l
-  left join mart.strategy_decisions d on d.strategy_run_id = l.strategy_run_id
-  group by l.strategy_key, l.strategy_run_id, l.executed_at
-  order by l.strategy_key
-"""
-
-BACKTEST_LATEST_SQL = """
-  select distinct on (strategy_key, universe_id)
-    strategy_key, universe_id, status, run_id,
-    to_char(executed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as executed_at,
-    cagr_monthly::text as cagr_monthly,
-    sharpe_daily::text as sharpe_daily
-  from mart.backtest_runs
-  order by strategy_key, universe_id, executed_at desc, created_at desc, run_id desc
-"""
-
-
-class ConstructionQuestionDto(BaseModel):
-    question_id: str
-    answered: int = 0
-    denominator: int = 0
-    actionable_denominator: int = 0
-    actionable_coverage_pct: float | None = None
-    world_absence: int = 0
-    pipeline_gap: int = 0
-    not_applicable: int = 0
-
-
-class ConstructionUniverseDto(BaseModel):
-    universe_key: str
-    universe_id: str | None = None
-    scheduled: bool = False
-    head_run_id: str | None = None
-    served_run_id: str | None = None
-    freshness: str | None = None
-    availability: str | None = None
-    report_matches_head: bool = False
-    questions: list[ConstructionQuestionDto] = Field(default_factory=list)
-
-
-class ConstructionStrategyRunDto(BaseModel):
-    strategy_key: str
-    strategy_run_id: str
-    executed_at: str
-    selected_count: int = 0
-    eligible_count: int = 0
-    total_count: int = 0
-
-
-class ConstructionBacktestDto(BaseModel):
-    strategy_key: str
-    universe_id: str
-    status: str
-    run_id: str
-    executed_at: str
-    cagr_monthly: str | None = None
-    sharpe_daily: str | None = None
-
-
-class ConstructionProgressDto(BaseModel):
-    environment: str
-    criteria_total: int = 0
-    criteria_verified: int = 0
-    criteria_partial: int = 0
-    criteria_pending: int = 0
-    criteria_failed_or_stale: int = 0
-    criteria: list[dict[str, Any]] = Field(default_factory=list)
-    universes: list[ConstructionUniverseDto] = Field(default_factory=list)
-    strategy_runs: list[ConstructionStrategyRunDto] = Field(default_factory=list)
-    backtest_runs: list[ConstructionBacktestDto] = Field(default_factory=list)
-
-
 def _parse_iso_utc(raw: Any) -> datetime | None:
     if raw is None:
         return None
@@ -428,219 +343,6 @@ def _enrich_nightly_verdicts(
     return enriched
 
 
-def _question_dto_from_payload(question_id: str, raw: Any) -> ConstructionQuestionDto:
-    entry = raw if isinstance(raw, dict) else {}
-    answered = int(entry.get("answered", 0) or 0)
-    denominator = int(entry.get("denominator", 0) or 0)
-    not_applicable = int(entry.get("not_applicable", 0) or 0)
-    raw_by_class = entry.get("by_class")
-    by_class: dict[str, Any] = raw_by_class if isinstance(raw_by_class, dict) else {}
-    world_absence = int(entry.get("world_absence", by_class.get("world_absence", 0)) or 0)
-    pipeline_gap = int(entry.get("pipeline_gap", by_class.get("pipeline_gap", 0)) or 0)
-    actionable_raw = entry.get("actionable_denominator")
-    if actionable_raw is not None:
-        actionable_denominator = int(actionable_raw)
-    else:
-        actionable_denominator = max(0, denominator - world_absence)
-    pct_raw = entry.get("actionable_coverage_pct")
-    if pct_raw is not None:
-        actionable_pct: float | None = float(pct_raw)
-    elif actionable_denominator > 0:
-        actionable_pct = round(answered * 100.0 / actionable_denominator, 2)
-    else:
-        actionable_pct = None
-    return ConstructionQuestionDto(
-        question_id=question_id,
-        answered=answered,
-        denominator=denominator,
-        actionable_denominator=actionable_denominator,
-        actionable_coverage_pct=actionable_pct,
-        world_absence=world_absence,
-        pipeline_gap=pipeline_gap,
-        not_applicable=not_applicable,
-    )
-
-
-def _evaluate_criteria_progress(
-    enriched_verdicts: list[dict[str, Any]],
-    *,
-    contract: Any,
-    env: str | None,
-) -> tuple[dict[str, int], list[dict[str, Any]]]:
-    by_name = {str(v.get("check_name") or ""): v for v in enriched_verdicts}
-    scheduled_lanes = {contract.universes[k].lane_name for k in contract.scheduled_universes(env)}
-    counts = {"total": 0, "verified": 0, "partial": 0, "pending": 0, "failed_or_stale": 0}
-    rows: list[dict[str, Any]] = []
-    for criterion in load_goal_criteria().criteria:
-        counts["total"] += 1
-        applicable = [
-            key
-            for key in criterion.verdict_keys
-            if "@" not in key or not scheduled_lanes or key.split("@", 1)[1] in scheduled_lanes
-        ]
-        if criterion.verdict_keys and not applicable:
-            counts["verified"] += 1
-            rows.append(
-                {
-                    "id": criterion.id,
-                    "root": criterion.root,
-                    "tier": criterion.tier,
-                    "status": criterion.status,
-                    "outcome": "not_applicable",
-                    "evidence": f"not scheduled in {env or 'environment'}",
-                }
-            )
-            continue
-        if not applicable:
-            if criterion.status == "backed":
-                counts["verified"] += 1
-                outcome = "verified"
-                evidence = "backed by contract/CI suite"
-            else:
-                outcome = "partial" if criterion.status == "partial" else "pending"
-                counts[outcome] += 1
-                evidence = f"awaiting {criterion.pending_on}" if criterion.pending_on else "unwired"
-            rows.append(
-                {
-                    "id": criterion.id,
-                    "root": criterion.root,
-                    "tier": criterion.tier,
-                    "status": criterion.status,
-                    "outcome": outcome,
-                    "evidence": evidence,
-                }
-            )
-            continue
-        parts: list[str] = []
-        bad = False
-        for key in applicable:
-            v = by_name.get(key)
-            state = str(v.get("freshness_state")) if v is not None else "missing"
-            if state != "pass":
-                bad = True
-                parts.append(f"{key}={state}")
-            else:
-                parts.append(f"{key}=pass")
-        if bad:
-            counts["failed_or_stale"] += 1
-            outcome = "failed_or_stale"
-        elif criterion.status == "partial":
-            counts["partial"] += 1
-            outcome = "partial"
-            if criterion.pending_on:
-                parts.append(f"partial({criterion.pending_on})")
-        elif criterion.status == "pending":
-            counts["pending"] += 1
-            outcome = "pending"
-            if criterion.pending_on:
-                parts.append(f"pending({criterion.pending_on})")
-        else:
-            counts["verified"] += 1
-            outcome = "verified"
-        rows.append(
-            {
-                "id": criterion.id,
-                "root": criterion.root,
-                "tier": criterion.tier,
-                "status": criterion.status,
-                "outcome": outcome,
-                "evidence": "; ".join(parts),
-            }
-        )
-    return counts, rows
-
-
-def _build_construction_progress(
-    cur: Any,
-    *,
-    env: str | None,
-    enriched_verdicts: list[dict[str, Any]],
-    served_heads: list[dict[str, Any]],
-) -> ConstructionProgressDto:
-    contract = load_environment_contract()
-    counts, criteria_rows = _evaluate_criteria_progress(enriched_verdicts, contract=contract, env=env)
-    question_cov = _optional_rows(cur, QUESTION_COVERAGE_SQL, table_check="mart.question_coverage_report")
-    strategy_rows = _optional_rows(cur, STRATEGY_RUN_COUNTS_SQL, table_check="mart.strategy_runs")
-    backtest_rows = _optional_rows(cur, BACKTEST_LATEST_SQL, table_check="mart.backtest_runs")
-
-    head_by_universe: dict[str, dict[str, Any]] = {}
-    for row in served_heads:
-        if (
-            row.get("factor_id") in ("gross_profit_per_employee", None)
-            or row.get("universe_id") not in head_by_universe
-        ):
-            uid = str(row.get("universe_id") or "")
-            if uid:
-                head_by_universe[uid] = row
-
-    cov_by_universe: dict[str, dict[str, Any]] = {
-        str(row.get("universe_id") or ""): row for row in question_cov if row.get("universe_id")
-    }
-    scheduled = set(contract.scheduled_universes(env))
-    universes: list[ConstructionUniverseDto] = []
-    for ukey, urec in contract.universes.items():
-        if urec.is_sentinel:
-            continue
-        matched_uid = next(
-            (uid for uid in head_by_universe if uid.startswith(urec.id_prefix)),
-            next((uid for uid in cov_by_universe if uid.startswith(urec.id_prefix)), None),
-        )
-        head = head_by_universe.get(matched_uid or "", {})
-        cov = cov_by_universe.get(matched_uid or "", {})
-        raw_payload = cov.get("payload")
-        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-        raw_q_map = payload.get("questions")
-        q_map: dict[str, Any] = raw_q_map if isinstance(raw_q_map, dict) else {}
-        questions = [_question_dto_from_payload(str(qid), q_map[qid]) for qid in sorted(q_map)]
-        universes.append(
-            ConstructionUniverseDto(
-                universe_key=ukey,
-                universe_id=matched_uid,
-                scheduled=ukey in scheduled,
-                head_run_id=head.get("head_run_id"),
-                served_run_id=head.get("run_id"),
-                freshness=head.get("freshness"),
-                availability=head.get("availability"),
-                report_matches_head=bool(cov.get("matches_served_head", False)),
-                questions=questions,
-            )
-        )
-
-    return ConstructionProgressDto(
-        environment=env or "unknown",
-        criteria_total=counts["total"],
-        criteria_verified=counts["verified"],
-        criteria_partial=counts["partial"],
-        criteria_pending=counts["pending"],
-        criteria_failed_or_stale=counts["failed_or_stale"],
-        criteria=criteria_rows,
-        universes=universes,
-        strategy_runs=[
-            ConstructionStrategyRunDto(
-                strategy_key=str(r["strategy_key"]),
-                strategy_run_id=str(r["strategy_run_id"]),
-                executed_at=str(r["executed_at"]),
-                selected_count=int(r.get("selected_count") or 0),
-                eligible_count=int(r.get("eligible_count") or 0),
-                total_count=int(r.get("total_count") or 0),
-            )
-            for r in strategy_rows
-        ],
-        backtest_runs=[
-            ConstructionBacktestDto(
-                strategy_key=str(r["strategy_key"]),
-                universe_id=str(r["universe_id"]),
-                status=str(r["status"]),
-                run_id=str(r["run_id"]),
-                executed_at=str(r["executed_at"]),
-                cagr_monthly=r.get("cagr_monthly"),
-                sharpe_daily=r.get("sharpe_daily"),
-            )
-            for r in backtest_rows
-        ],
-    )
-
-
 class OpsOverviewResponse(BaseModel):
     runs: list[OpsRunRowDto] | str = "unavailable"
     data_engine: OpsDataEngineBuildDto | None = None
@@ -651,7 +353,6 @@ class OpsOverviewResponse(BaseModel):
     failed_job_errors: list[dict[str, Any]] = Field(default_factory=list)
     trigger_queue: list[dict[str, Any]] = Field(default_factory=list)
     rollback_requests: list[dict[str, Any]] = Field(default_factory=list)
-    construction_progress: ConstructionProgressDto | None = None
 
 
 class DatahubStatsResponse(BaseModel):
@@ -659,7 +360,6 @@ class DatahubStatsResponse(BaseModel):
     capture_runs: list[dict[str, Any]] = Field(default_factory=list)
     validation: list[dict[str, Any]] = Field(default_factory=list)
     capacity: list[dict[str, Any]] = Field(default_factory=list)
-    vendor_accounts: list[dict[str, Any]] = Field(default_factory=list)
     model_1302_by_day: list[dict[str, Any]] = Field(default_factory=list)
     traffic: list[dict[str, Any]] = Field(default_factory=list)
     recent_calls: list[dict[str, Any]] = Field(default_factory=list)
@@ -669,13 +369,10 @@ class DatahubStatsResponse(BaseModel):
     oracle_outcomes: list[dict[str, Any]] = Field(default_factory=list)
     served_heads: list[dict[str, Any]] = Field(default_factory=list)
     served_artifacts: list[dict[str, Any]] = Field(default_factory=list)
-    nightly_verdicts: list[dict[str, Any]] = Field(default_factory=list)
     output_invariants: list[dict[str, Any]] = Field(default_factory=list)
     oracle_disagreements: list[dict[str, Any]] = Field(default_factory=list)
     llm_usage: list[dict[str, Any]] = Field(default_factory=list)
     backfill_health: list[dict[str, Any]] = Field(default_factory=list)
-    trigger_queue: list[dict[str, Any]] = Field(default_factory=list)
-    rollback_requests: list[dict[str, Any]] = Field(default_factory=list)
     db_hygiene: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -842,11 +539,8 @@ def _attach_wilson_upper_bounds(rows: list[dict[str, Any]]) -> list[dict[str, An
     return out
 
 
-def _build_vendor_capacity(
-    contract: Any, env_name: str, usage_rows: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_vendor_capacity(contract: Any, env_name: str, usage_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     usage_by_source = {str(r["source"]): r for r in usage_rows if r.get("source") is not None}
-    accounts_out: list[dict[str, Any]] = []
     capacity_out: list[dict[str, Any]] = []
     for name, acct in sorted(contract.vendor_accounts.accounts.items()):
         share = contract.account_share(name, env_name)
@@ -857,30 +551,6 @@ def _build_vendor_capacity(
         calls_24h = int(usage.get("calls_24h") or 0)
         calls_7d = int(usage.get("calls_7d") or 0)
         rate_limited_24h = int(usage.get("rate_limited_24h") or 0)
-        limits_list = [
-            {
-                "limit_id": lim.limit_id,
-                "unit": lim.unit,
-                "window_seconds": lim.window_seconds,
-                "amount": lim.amount,
-                "share": lim.share,
-            }
-            for lim in share.limits
-        ]
-        accounts_out.append(
-            {
-                "account": name,
-                "holder": acct.holder,
-                "environment": share.environment,
-                "percent": share.percent,
-                "seats": list(acct.seats),
-                "outside_consumers": bool(acct.outside_consumers),
-                "calls_24h": calls_24h,
-                "calls_7d": calls_7d,
-                "rate_limited_24h": rate_limited_24h,
-                "limits": limits_list,
-            }
-        )
         for lim in share.limits:
             window = lim.window_seconds
             share_val = lim.share
@@ -915,7 +585,7 @@ def _build_vendor_capacity(
                     "rate_limited_24h": rate_limited_24h,
                 }
             )
-    return accounts_out, capacity_out
+    return capacity_out
 
 
 def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
@@ -1015,12 +685,6 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
         failed_job_errors = _optional_rows(cur, FAILED_JOB_ERRORS_SQL, table_check="dagster.event_logs")
         trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
         rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
-        construction_progress = _build_construction_progress(
-            cur,
-            env=env_name,
-            enriched_verdicts=nightly_verdicts,
-            served_heads=served_heads,
-        )
 
         return OpsOverviewResponse(
             runs=runs,
@@ -1032,7 +696,6 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
             failed_job_errors=failed_job_errors,
             trigger_queue=trigger_queue,
             rollback_requests=rollback_requests,
-            construction_progress=construction_progress,
         )
 
     return with_ops_reader(_q, database_url=database_url)
@@ -1092,7 +755,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             """,
             ("%1302%",),
         )
-        vendor_accounts, capacity = _build_vendor_capacity(contract, normalized_env, usage_rows)
+        capacity = _build_vendor_capacity(contract, normalized_env, usage_rows)
         model_1302_by_day = _optional_rows(
             cur,
             f"""
@@ -1148,8 +811,6 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "select artifact_key, lane, schedule_name, universe_like, family, served_to, wired "
             "from mart.served_artifact order by lane, artifact_key",
         )
-        env_name = str(getattr(settings, "environment", "") or "").strip() or None
-        nightly_verdicts = _enrich_nightly_verdicts(_optional_rows(cur, NIGHTLY_VERDICTS_SQL), env=env_name)
         output_invariants = _optional_rows(
             cur,
             """
@@ -1191,8 +852,6 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             limit 40
             """,
         )
-        trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
-        rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
         stats_reset_rows = _optional_rows(
             cur,
             "select to_char(stats_reset at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as stats_reset "
@@ -1243,7 +902,6 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             capture_runs=capture_runs,
             validation=validation,
             capacity=capacity,
-            vendor_accounts=vendor_accounts,
             model_1302_by_day=model_1302_by_day,
             traffic=traffic,
             recent_calls=recent_calls,
@@ -1253,13 +911,10 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             oracle_outcomes=oracle_outcomes,
             served_heads=served_heads,
             served_artifacts=served_artifacts,
-            nightly_verdicts=nightly_verdicts,
             output_invariants=output_invariants,
             oracle_disagreements=oracle_disagreements,
             llm_usage=llm_usage,
             backfill_health=backfill_health,
-            trigger_queue=trigger_queue,
-            rollback_requests=rollback_requests,
             db_hygiene=db_hygiene,
         )
 

@@ -187,7 +187,6 @@ def test_unified_card_export_prefers_governed_artifact_and_persists_document(
     assert denied.status_code == 403
 
 
-@pytest.mark.criterion("R5.E9")
 def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -397,7 +396,10 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         assert dh.status_code == 200
         dh_json = dh.json()
         assert "capture_runs" in dh_json and "runs" not in dh_json
-        assert "heads" not in dh_json and "served_heads" in dh_json and "nightly_verdicts" in dh_json
+        assert "heads" not in dh_json and "served_heads" in dh_json
+        assert all(
+            k not in dh_json for k in ("vendor_accounts", "nightly_verdicts", "trigger_queue", "rollback_requests")
+        )
         assert len(dh_json["served_heads"]) >= 2, dh_json["served_heads"]
         assert any(h.get("bound_strategy_run_id") == new_run for h in dh_json["served_heads"]), dh_json["served_heads"]
         assert "db_hygiene" in dh_json and "stats_reset" in dh_json["db_hygiene"]
@@ -600,9 +602,7 @@ def test_issuer_module_reader_resolves_candidates_once_per_instance(monkeypatch:
     assert all("= any(%s::text[])" in sql and "mart.entity_identity" not in sql for sql in module_sqls)
 
 
-def test_ops_overview_marks_stale_and_missing_verdicts_and_builds_construction_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_ops_overview_marks_stale_and_missing_verdicts() -> None:
     """Honest metrics (#1747): overdue verdicts are marked stale, absent expected checks are synthesized missing."""
     from datetime import timedelta
 
@@ -635,120 +635,13 @@ def test_ops_overview_marks_stale_and_missing_verdicts_and_builds_construction_p
     assert by_name["job_run_health"]["freshness_state"] == "pass"
     assert by_name["topt_baseline"]["freshness_state"] == "missing"
 
-    class _MockCur:
-        def __init__(self) -> None:
-            self._sql = ""
-
-        def execute(self, sql: str, _params: Any = None) -> None:
-            self._sql = sql
-
-        def fetchone(self) -> dict[str, Any]:
-            return {"reg": "present"}
-
-        def fetchall(self) -> list[dict[str, Any]]:
-            if "mart.question_coverage_report" in self._sql:
-                return [
-                    {
-                        "universe_id": "universe:topt-us-2026-06-30",
-                        "matches_served_head": True,
-                        "payload": {
-                            "questions": {
-                                "q1": {
-                                    "answered": 8,
-                                    "denominator": 10,
-                                    "not_applicable": 2,
-                                    "world_absence": 0,
-                                    "pipeline_gap": 0,
-                                    "actionable_denominator": 8,
-                                    "actionable_coverage_pct": 100.0,
-                                }
-                            }
-                        },
-                    }
-                ]
-            if "from latest l" in self._sql:
-                return [
-                    {
-                        "strategy_key": "large_model_value_v0",
-                        "strategy_run_id": f"strategy-run:{'1' * 64}",
-                        "executed_at": "2026-11-26T01:00:00Z",
-                        "selected_count": 3,
-                        "eligible_count": 6,
-                        "total_count": 10,
-                    }
-                ]
-            if "from mart.backtest_runs" in self._sql:
-                return [
-                    {
-                        "strategy_key": "large_model_value_v0",
-                        "universe_id": "universe:topt-us-2026-06-30",
-                        "status": "succeeded",
-                        "run_id": f"backtest-run:{'2' * 64}",
-                        "executed_at": "2026-11-26T02:00:00Z",
-                        "cagr_monthly": "0.145",
-                        "sharpe_daily": "1.25",
-                    }
-                ]
-            return []
-
-        @property
-        def connection(self) -> Any:
-            class _Tx:
-                def __enter__(self) -> None:
-                    return None
-
-                def __exit__(self, *_args: Any) -> bool:
-                    return False
-
-            class _Conn:
-                def transaction(self) -> _Tx:
-                    return _Tx()
-
-            return _Conn()
-
-    progress = admin_service._build_construction_progress(
-        _MockCur(),
-        env="staging",
-        enriched_verdicts=enriched,
-        served_heads=[
-            {
-                "universe_id": "universe:topt-us-2026-06-30",
-                "factor_id": "gross_profit_per_employee",
-                "head_run_id": f"capture-run:{'3' * 64}",
-                "run_id": f"capture-run:{'3' * 64}",
-                "freshness": "fresh",
-                "availability": "available",
-            }
-        ],
-    )
-    assert progress.criteria_total == 30
-    assert progress.criteria_failed_or_stale > 0
-    assert progress.strategy_runs[0].selected_count == 3
-    assert progress.backtest_runs[0].status == "succeeded"
-    topt_u = next(u for u in progress.universes if u.universe_key == "topt")
-    assert topt_u.questions[0].actionable_coverage_pct == pytest.approx(100.0)
-
-
-def test_app_ops_reader_can_query_strategy_and_backtest_tables() -> None:
-    """Verify db/roles.sql grants app_ops_reader select on mart strategy/backtest tables for /admin."""
-    import psycopg
-    from truealpha_runtime.testing import isolated_test_database
-
-    with isolated_test_database("ops_reader_strategy_grants") as db:
-        with psycopg.connect(str(db)) as conn:
-            with conn.transaction():
-                conn.execute("set local role app_ops_reader")
-                assert conn.execute("select count(*) from mart.strategy_runs").fetchone() == (0,)
-                assert conn.execute("select count(*) from mart.strategy_decisions").fetchone() == (0,)
-                assert conn.execute("select count(*) from mart.backtest_runs").fetchone() == (0,)
-
 
 def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
     """Verify rolling window capacity matching, confidence payload stripping with tier_counts, and Wilson single source."""
     from truealpha_contracts.environment_contract import load_environment_contract
 
     contract = load_environment_contract()
-    _, cap = admin_service._build_vendor_capacity(
+    cap = admin_service._build_vendor_capacity(
         contract,
         "staging",
         [

@@ -176,7 +176,6 @@ grant select on mart.freshness_limit to app_ops_reader;
 grant select on mart.served_head_environments to mart_readonly;
 grant select on mart.served_head_environments to app_ops_reader;
 grant select on mart.strategy_run_capture_bindings to app_ops_reader;
-grant select on mart.strategy_runs, mart.strategy_decisions, mart.backtest_runs to app_ops_reader;
 -- #712: the data-engine build behind the newest run, for the /admin deployments card.
 grant select on mart.data_engine_identity to app_ops_reader;
 -- #756: the database environment identity, for admin / status readers.
