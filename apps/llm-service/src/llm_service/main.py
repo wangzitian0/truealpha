@@ -20,7 +20,7 @@ from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import build_mcp_server
-from llm_service.services._db import with_ops_reader
+from llm_service.services._db import close_pools, with_ops_reader
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,11 @@ def refuse_to_boot_on_a_missing_environment() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     refuse_to_boot_on_a_missing_environment()
-    async with _mcp_runtime.lifespan():
-        yield
+    try:
+        async with _mcp_runtime.lifespan():
+            yield
+    finally:
+        close_pools()
 
 
 app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
