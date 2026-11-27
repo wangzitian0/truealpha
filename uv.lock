@@ -1005,15 +1005,15 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "4.13.0"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.0/infra2_sdk-4.13.0-py3-none-any.whl" }
+version = "4.13.2"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.2/infra2_sdk-4.13.2-py3-none-any.whl" }
 dependencies = [
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
     { name = "pydantic", version = "2.14.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.0/infra2_sdk-4.13.0-py3-none-any.whl", hash = "sha256:7f348d6eab37a2e43640c425e9a5bbedc12f05e056f5512f81209df0a3889d5b" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.2/infra2_sdk-4.13.2-py3-none-any.whl", hash = "sha256:68764a82b990341e7434d30fdbb678c469c4bb3df59af9dc76ea9b0f01dfc927" },
 ]
 
 [package.optional-dependencies]
@@ -3289,7 +3289,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["http", "telemetry", "llm"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.0/infra2_sdk-4.13.0-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http", "telemetry", "llm"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.2/infra2_sdk-4.13.2-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "common/contracts" },
