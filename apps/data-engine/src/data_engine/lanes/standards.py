@@ -8,6 +8,7 @@ from typing import Any
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import key_of_lane, lane_name, universes_with_role
 
 from data_engine import db
@@ -53,21 +54,15 @@ NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
 )
 
 NPORT_MONTHLY_SCHEDULE_NAME = "nport_monthly_schedule"
-NPORT_MONTHLY_CRON = "7 11 1 * *"
 THIRTEENF_QUARTERLY_SCHEDULE_NAME = "13f_quarterly_schedule"
-THIRTEENF_QUARTERLY_CRON = "7 12 15 1,4,7,10 *"
 FORM4_DAILY_SCHEDULE_NAME = "form4_daily_schedule"
-FORM4_DAILY_CRON = "7 13 * * *"
 TENK_ANNUAL_SCHEDULE_NAME = "10k_annual_schedule"
-TENK_ANNUAL_CRON = "7 14 * * 0"
 
-STANDARDS_PLANE_CRONS: Mapping[str, str] = {
-    NPORT_MONTHLY_SCHEDULE_NAME: NPORT_MONTHLY_CRON,
-    THIRTEENF_QUARTERLY_SCHEDULE_NAME: THIRTEENF_QUARTERLY_CRON,
-    FORM4_DAILY_SCHEDULE_NAME: FORM4_DAILY_CRON,
-    TENK_ANNUAL_SCHEDULE_NAME: TENK_ANNUAL_CRON,
-}
-STANDARDS_PLANE_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
+STANDARDS_PLANE_CRONS: Mapping[str, str] = load_environment_contract().standards_plane_crons()
+NPORT_MONTHLY_CRON = STANDARDS_PLANE_CRONS[NPORT_MONTHLY_SCHEDULE_NAME]
+THIRTEENF_QUARTERLY_CRON = STANDARDS_PLANE_CRONS[THIRTEENF_QUARTERLY_SCHEDULE_NAME]
+FORM4_DAILY_CRON = STANDARDS_PLANE_CRONS[FORM4_DAILY_SCHEDULE_NAME]
+TENK_ANNUAL_CRON = STANDARDS_PLANE_CRONS[TENK_ANNUAL_SCHEDULE_NAME]
 
 HEAD_RUN_TAG = "truealpha/head_run"
 
@@ -104,7 +99,6 @@ __all__ = (
     "STANDARD_HISTORY_JOB_NAME",
     "STANDARD_HISTORY_MONTHS",
     "STANDARDS_PLANE_CRONS",
-    "STANDARDS_PLANE_SCHEDULE_STATUS",
     "STANDARDS_WITH_HISTORY",
     "StandardBackfillConfig",
     "StandardHistoryConfig",
@@ -1048,8 +1042,17 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     yield from requests
 
 
-def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
+def build_standards_plane_schedules(environment: str = settings.environment) -> tuple[dg.ScheduleDefinition, ...]:
     from data_engine.lanes.universe_refresh import universe_refresh_pipeline_job
+
+    contract = load_environment_contract()
+
+    def _status(name: str) -> dg.DefaultScheduleStatus:
+        return (
+            dg.DefaultScheduleStatus.RUNNING
+            if contract.is_standards_schedule_scheduled(name, environment)
+            else dg.DefaultScheduleStatus.STOPPED
+        )
 
     def _build_one(name: str, cron: str) -> dg.ScheduleDefinition:
         if name == NPORT_MONTHLY_SCHEDULE_NAME:
@@ -1058,17 +1061,17 @@ def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
                 cron,
                 lambda ctx: [dg.RunRequest(run_key=f"{name}:{ctx.scheduled_execution_time.isoformat()}")],
                 name=name,
-                default_status=STANDARDS_PLANE_SCHEDULE_STATUS,
+                default_status=_status(name),
             )
         return _cron_schedule(
             standard_backfill_pipeline_job,
             cron,
             lambda ctx: _backfill_requests(ctx.scheduled_execution_time.isoformat(), key_prefix=name),
             name=name,
-            default_status=STANDARDS_PLANE_SCHEDULE_STATUS,
+            default_status=_status(name),
         )
 
-    return tuple(_build_one(name, cron) for name, cron in STANDARDS_PLANE_CRONS.items())
+    return tuple(_build_one(name, cron) for name, cron in contract.standards_plane_crons().items())
 
 
 (
@@ -1084,20 +1087,24 @@ def build_definitions(environment: str = settings.environment) -> dg.Definitions
         backfill_sched = standard_backfill_schedule
         history_sched = standard_history_schedule
         reports_sched = head_reports_schedule
+        standards_scheds = (
+            nport_monthly_schedule,
+            thirteenf_quarterly_schedule,
+            form4_daily_schedule,
+            tenk_annual_schedule,
+        )
     else:
         backfill_sched = _build_standard_backfill_schedule(environment)
         history_sched = _build_standard_history_schedule(environment)
         reports_sched = _build_head_reports_schedule(environment)
+        standards_scheds = build_standards_plane_schedules(environment)
     return dg.Definitions(
         jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
         schedules=[
             backfill_sched,
             history_sched,
             reports_sched,
-            nport_monthly_schedule,
-            thirteenf_quarterly_schedule,
-            form4_daily_schedule,
-            tenk_annual_schedule,
+            *standards_scheds,
         ],
         sensors=[head_reports_sensor, standard_backfill_catchup_sensor],
     )

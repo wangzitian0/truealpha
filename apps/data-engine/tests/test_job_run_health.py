@@ -232,7 +232,7 @@ def test_the_summary_names_jobs_and_counts_and_nothing_else() -> None:
     judgement = job_run_health.judge(newest_first(FLEET, runs_of("nightly", "ssssff")), now=NOW)
 
     assert judgement.summary == "nightly (last 2 scheduled runs failed). 2 jobs, 7 of 46 runs failed in 7 days"
-    assert len(judgement.summary) <= 300, "the column of mart.nightly_verdicts holds 300 characters"
+    assert len(judgement.summary) <= 300, "the column of ops.nightly_verdicts holds 300 characters"
 
 
 # --- the deployed job over Postgres -----------------------------------------------------------------------
@@ -276,7 +276,7 @@ def run_check(url: str, monkeypatch: pytest.MonkeyPatch, tick: datetime = TICK) 
     assert result.success, "a red verdict is a dashboard row: the run that records it stays green"
     with psycopg.connect(url) as reader:
         row = reader.execute(
-            "select ok, summary, dagster_run_id, ran_at from mart.nightly_verdicts "
+            "select ok, summary, dagster_run_id, ran_at from ops.nightly_verdicts "
             "where check_name = 'job_run_health' order by recorded_at desc limit 1"
         ).fetchone()
     assert row is not None, "the job records a verdict"

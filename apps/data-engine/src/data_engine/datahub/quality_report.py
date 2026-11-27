@@ -319,7 +319,7 @@ def build_report(
 ) -> dict[str, Any]:
     status = conn.execute(
         "select obligation_count, terminal_count, success_count, unchanged_count, unavailable_count, skipped_count, failed_count, complete "
-        "from mart.capture_status where run_id = %s",
+        "from ops.capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:
@@ -334,7 +334,7 @@ def build_report(
         "left join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
         "left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
         "left join raw.fetches f on f.id = v.raw_fetch_id "
-        "left join mart.capture_meta_info meta on meta.obligation_id = ob.obligation_id "
+        "left join ops.capture_meta_info meta on meta.obligation_id = ob.obligation_id "
         "where ob.run_id = %s order by ob.obligation_id, o.observation_id",
         (run_id,),
     ).fetchall()

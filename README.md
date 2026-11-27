@@ -16,7 +16,7 @@ apps/app-web        TS/Bun  Next.js — zero-DB frontend calling FastAPI /api/v1
 common/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
 common/factors        Python  the ONLY place computation logic lives (base / composite / shared)
 common/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes
-db                  SQL     raw / staging / mart / dagster / app schemas + mart_readonly role
+db                  SQL     raw / staging / mart / ops / dagster / app schemas + role boundaries
 ```
 
 ## Quickstart

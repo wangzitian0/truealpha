@@ -21,17 +21,24 @@ begin
         'mart.current_pointer',
         'mart.current_pointer_head',
         'mart.nightly_verdicts',
-        'mart.output_invariant_results'
+        'mart.output_invariant_results',
+        'mart.data_engine_identity',
+        'mart.capture_status',
+        'mart.capture_meta_info'
     ] loop
         if to_regclass(tbl) is not null and has_table_privilege('mart_readonly', tbl, 'select') then
             execute format('revoke select on %s from mart_readonly', tbl);
         end if;
     end loop;
+    if exists (select 1 from pg_namespace where nspname = 'ops')
+       and has_schema_privilege('mart_readonly', 'ops', 'usage') then
+        revoke all on schema ops from mart_readonly;
+    end if;
 end $$;
 
 -- Trusted application repositories assume this group role only after deriving
--- transaction-local tenant and principal context. It has no raw access and
--- only the explicit staging queue exceptions granted below.
+-- transaction-local tenant and principal context. It has no raw/staging access;
+-- DB-mediated pipeline trigger and head rollback requests live in ops.
 do $$ begin
     create role app_runtime nologin;
 exception when duplicate_object then null;
@@ -40,13 +47,29 @@ end $$;
 alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
--- Staging write exceptions: DB-mediated pipeline trigger and head rollback
--- requests. USAGE on staging plus these two tables exposes nothing else;
--- consume-UPDATEs stay with the data-engine/migration role, and each table's
--- triggers enforce append-only and consume-once invariants.
-grant usage on schema staging to app_runtime;
-grant select, insert on staging.pipeline_trigger_requests to app_runtime;
-grant select, insert on staging.head_rollback_requests to app_runtime;
+grant usage on schema ops to app_runtime;
+grant select, insert on ops.pipeline_trigger_requests to app_runtime;
+grant select, insert on ops.head_rollback_requests to app_runtime;
+do $$
+declare
+    tbl text;
+begin
+    foreach tbl in array array[
+        'staging.pipeline_trigger_requests',
+        'staging.head_rollback_requests'
+    ] loop
+        if to_regclass(tbl) is not null and (
+            has_table_privilege('app_runtime', tbl, 'select')
+            or has_table_privilege('app_runtime', tbl, 'insert')
+        ) then
+            execute format('revoke all on %s from app_runtime', tbl);
+        end if;
+    end loop;
+    if exists (select 1 from pg_namespace where nspname = 'staging')
+       and has_schema_privilege('app_runtime', 'staging', 'usage') then
+        revoke all on schema staging from app_runtime;
+    end if;
+end $$;
 
 -- Login front door (#368). Login itself runs before any
 -- tenant/principal GUC is set (it is what *establishes* that context), so
@@ -151,16 +174,11 @@ do $$ begin
 end $$;
 grant usage on schema raw to app_ops_reader;
 grant select on raw.fetches to app_ops_reader;
--- #539 universe provenance page: the constituent plane + governed heads, read-only.
-grant usage on schema staging to app_ops_reader;
-grant select on staging.etf_constituent_facts to app_ops_reader;
-grant select on staging.accepted_rulesets to app_ops_reader;
-grant select on staging.accepted_ruleset_head to app_ops_reader;
-grant select on staging.contract_objects to app_ops_reader;
 -- #729: the external call ledger — /admin/datahub's Capacity and Traffic sections read
 -- every vendor request (success or failure) and join it to the landed raw.fetches row.
+grant usage on schema staging to app_ops_reader;
 grant select on staging.api_call_ledger to app_ops_reader;
-grant select on staging.model_invocations, staging.ingestion_health_log, staging.pipeline_trigger_requests, staging.head_rollback_requests to app_ops_reader;
+grant select on staging.model_invocations, staging.ingestion_health_log to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
 -- #1062: the served head, with its age, limit, label and availability.
@@ -176,8 +194,6 @@ grant select on mart.freshness_limit to app_ops_reader;
 grant select on mart.served_head_environments to mart_readonly;
 grant select on mart.served_head_environments to app_ops_reader;
 grant select on mart.strategy_run_capture_bindings to app_ops_reader;
--- #712: the data-engine build behind the newest run, for the /admin deployments card.
-grant select on mart.data_engine_identity to app_ops_reader;
 -- #756: the database environment identity, for admin / status readers.
 grant select on mart.environment_identity to app_ops_reader;
 -- #998: a SECURITY DEFINER routine runs with its OWNER's privileges, and PostgreSQL grants
@@ -215,13 +231,10 @@ grant select on mart.datahub_quality_report to app_ops_reader;
 grant select on mart.question_coverage_report to app_ops_reader;
 -- The nightly confidence & accuracy report rendered on /admin/datahub.
 grant select on mart.datahub_confidence_report to app_ops_reader;
-grant select on mart.capture_status to app_ops_reader;
 grant select on mart.capture_issuer_lineage to mart_readonly;
 grant select on mart.capture_issuer_lineage to app_ops_reader;
-grant select on mart.nightly_verdicts to app_ops_reader;
 grant select on mart.oracle_outcomes to app_ops_reader;
 grant select on mart.cell_confidence to app_ops_reader;
-grant select on mart.capture_meta_info, mart.output_invariant_results to app_ops_reader;
 grant select on mart.fund_virtual_company to app_ops_reader;
 grant select on mart.issuer_analyst_ratings to app_ops_reader;
 grant select on mart.issuer_supply_chain_exposure to app_ops_reader;
@@ -230,13 +243,24 @@ grant select on mart.macro_series, mart.macro_series_daily, mart.macro_series_cu
 grant select on mart.metric_node_values to app_ops_reader;
 grant select on mart.research_card_artifacts to mart_readonly;
 grant select on mart.research_card_artifacts to app_ops_reader;
--- The Capacity section (#671) derives capture-window durations from the
--- obligation results — read-only, same posture.
-grant select on raw.capture_obligations to app_ops_reader;
-grant select on raw.capture_obligation_results to app_ops_reader;
--- The N-PORT holdings plane (#63): read-only access for admin DataHub inspection
--- of filed weights (same posture as raw capture obligations above).
-grant select on staging.fund_holding_facts to app_ops_reader;
+do $$
+declare
+    tbl text;
+begin
+    foreach tbl in array array[
+        'staging.etf_constituent_facts',
+        'staging.accepted_rulesets',
+        'staging.accepted_ruleset_head',
+        'staging.contract_objects',
+        'staging.fund_holding_facts',
+        'raw.capture_obligations',
+        'raw.capture_obligation_results'
+    ] loop
+        if to_regclass(tbl) is not null and has_table_privilege('app_ops_reader', tbl, 'select') then
+            execute format('revoke select on %s from app_ops_reader', tbl);
+        end if;
+    end loop;
+end $$;
 grant app_ops_reader to app_service_login;
 
 -- Q04: Separate ops view surface for operational readers and least-privilege non-superuser

@@ -168,7 +168,7 @@ NIGHTLY_VERDICTS_SQL = """
     check_name, ok, summary, dagster_run_id,
     to_char(ran_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as ran_at,
     to_char(recorded_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as recorded_at
-  from mart.nightly_verdicts
+  from ops.nightly_verdicts
   order by check_name, ran_at desc, recorded_at desc, verdict_id desc
 """
 
@@ -177,7 +177,7 @@ TRIGGER_QUEUE_SQL = """
          to_char(executed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as executed_at,
          to_char(requested_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as requested_at,
          to_char(consumed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as consumed_at
-  from staging.pipeline_trigger_requests
+  from ops.pipeline_trigger_requests
   order by request_id desc
   limit 20
 """
@@ -187,7 +187,7 @@ ROLLBACK_QUEUE_SQL = """
          target_run_id, reason, requested_by, dedupe_key, result_pointer_id,
          to_char(requested_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as requested_at,
          to_char(consumed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as consumed_at
-  from staging.head_rollback_requests
+  from ops.head_rollback_requests
   order by request_id desc
   limit 20
 """
@@ -329,7 +329,7 @@ def _enrich_nightly_verdicts(
             {
                 "check_name": name,
                 "ok": None,
-                "summary": "missing from mart.nightly_verdicts",
+                "summary": "missing from ops.nightly_verdicts",
                 "dagster_run_id": None,
                 "ran_at": None,
                 "recorded_at": None,
@@ -592,7 +592,7 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
     def _q(cur: Any) -> OpsOverviewResponse:
         de: OpsDataEngineBuildDto | None = None
         cur.execute(
-            "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity order by created_at desc limit 1"
+            "select run_id, git_sha, image_digest, created_at from ops.data_engine_identity order by created_at desc limit 1"
         )
         if row := cur.fetchone():
             de = OpsDataEngineBuildDto(
@@ -727,7 +727,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             cur,
             "select run_id, universe_id, cutoff::text as cutoff, obligation_count as obligations, "
             "(success_count + unchanged_count)::int as resolved, failed_count as failed, complete "
-            "from mart.capture_status order by cutoff desc limit 12",
+            "from ops.capture_status order by cutoff desc limit 12",
         )
         traffic = _rows(
             cur,
@@ -817,7 +817,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             select distinct on (invariant_id)
               invariant_id, kind, population, violation_count, deferred, sample_rows, dagster_run_id,
               to_char(checked_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as checked_at
-            from mart.output_invariant_results
+            from ops.output_invariant_results
             order by invariant_id, checked_at desc, result_id desc
             """,
         )
@@ -863,7 +863,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "pg_relation_size(s.indexrelid)::bigint as size_bytes "
             "from pg_stat_user_indexes s "
             "join pg_index i on i.indexrelid = s.indexrelid "
-            "where s.schemaname in ('raw', 'staging', 'mart', 'app') "
+            "where s.schemaname in ('raw', 'staging', 'mart', 'ops', 'app') "
             "  and not i.indisprimary and not i.indisunique and s.idx_scan = 0 "
             "order by pg_relation_size(s.indexrelid) desc, s.schemaname, s.relname, s.indexrelname limit 50",
         )
@@ -873,7 +873,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "(coalesce(seq_scan, 0) + coalesce(idx_scan, 0))::bigint as total_scans, "
             "pg_total_relation_size(relid)::bigint as size_bytes "
             "from pg_stat_user_tables "
-            "where schemaname in ('raw', 'staging', 'mart', 'app') "
+            "where schemaname in ('raw', 'staging', 'mart', 'ops', 'app') "
             "  and coalesce(seq_scan, 0) = 0 and coalesce(idx_scan, 0) = 0 "
             "order by n_live_tup desc, pg_total_relation_size(relid) desc, schemaname, relname limit 50",
         )
@@ -887,7 +887,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             f"select 'plausibility sign checks' as check, "
             f"case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict, "
             f"coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail "
-            f"from mart.datahub_quality_report q join mart.capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
+            f"from mart.datahub_quality_report q join ops.capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
             "order by s.cutoff desc limit 1",
             (sentinel_likes,),
         ) + _rows(
@@ -895,7 +895,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "select 'cross-run reuse (24h)' as check, "
             "case when coalesce(sum(unchanged_count), 0) > 0 then 'active' else 'idle' end as verdict, "
             "coalesce(sum(unchanged_count), 0) || ' vendor fetches avoided across ' || count(*) || ' runs' as detail "
-            "from mart.capture_status where cutoff > now() - interval '24 hours'",
+            "from ops.capture_status where cutoff > now() - interval '24 hours'",
         )
         return DatahubStatsResponse(
             sources=sources,
@@ -1083,7 +1083,7 @@ def trigger_pipeline(
     def _q(cur: Any) -> int:
         cur.execute(
             """
-            insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch)
+            insert into ops.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch)
             values (%s, %s, %s, %s, %s)
             returning request_id
             """,
@@ -1136,7 +1136,7 @@ def request_head_rollback(
     def _insert(cur: Any) -> tuple[int, str]:
         cur.execute(
             """
-            insert into staging.head_rollback_requests (
+            insert into ops.head_rollback_requests (
                 environment, universe_id, universe_version, factor_id,
                 target_run_id, reason, requested_by, dedupe_key
             )

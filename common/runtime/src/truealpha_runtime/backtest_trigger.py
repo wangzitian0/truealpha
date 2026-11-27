@@ -112,7 +112,7 @@ def enqueue_backtest_trigger(cur: Any, *, principal_id: str, prepared: PreparedB
     cur.execute(
         """
         with inserted as (
-            insert into staging.pipeline_trigger_requests (
+            insert into ops.pipeline_trigger_requests (
                 job_name, executed_at, requested_by, dedupe_key, force_fetch, config_json
             )
             values ('nightly_backtest_pipeline', %s, %s, %s, false, %s::jsonb)
@@ -121,7 +121,7 @@ def enqueue_backtest_trigger(cur: Any, *, principal_id: str, prepared: PreparedB
         )
         select request_id from inserted
         union all
-        select request_id from staging.pipeline_trigger_requests where dedupe_key = %s
+        select request_id from ops.pipeline_trigger_requests where dedupe_key = %s
         limit 1
         """,
         (prepared.executed_at, principal_id, prepared.dedupe_key, prepared.config_json, prepared.dedupe_key),

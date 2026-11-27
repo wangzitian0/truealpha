@@ -267,7 +267,7 @@ begin
         raise exception 'mart.governed_strategy_run must read mart.served_head, exclude canary, and require run_id is not null';
     end if;
 
-    insert into staging.head_rollback_requests (
+    insert into ops.head_rollback_requests (
         environment, universe_id, universe_version, factor_id, target_run_id, reason, requested_by, dedupe_key
     ) values (
         'ci', 'universe:topt-us-2026-03-31', 'v1', 'gross_profit_per_employee',
@@ -275,36 +275,36 @@ begin
     ) returning request_id into rollback_id;
 
     begin
-        delete from staging.head_rollback_requests where request_id = rollback_id;
+        delete from ops.head_rollback_requests where request_id = rollback_id;
     exception when check_violation then
         delete_rejected := true;
     end;
     if not delete_rejected then
-        raise exception 'staging.head_rollback_requests accepted delete';
+        raise exception 'ops.head_rollback_requests accepted delete';
     end if;
 
     begin
-        update staging.head_rollback_requests set reason = 'tampered' where request_id = rollback_id;
+        update ops.head_rollback_requests set reason = 'tampered' where request_id = rollback_id;
     exception when check_violation then
         immutable_rejected := true;
     end;
     if not immutable_rejected then
-        raise exception 'staging.head_rollback_requests accepted immutable field update';
+        raise exception 'ops.head_rollback_requests accepted immutable field update';
     end if;
 
-    update staging.head_rollback_requests
+    update ops.head_rollback_requests
     set consumed_at = now(), result_pointer_id = 'current-pointer:' || repeat('b', 64)
     where request_id = rollback_id;
 
     begin
-        update staging.head_rollback_requests
+        update ops.head_rollback_requests
         set consumed_at = now(), result_pointer_id = 'current-pointer:' || repeat('c', 64)
         where request_id = rollback_id;
     exception when check_violation then
         reconsume_rejected := true;
     end;
     if not reconsume_rejected then
-        raise exception 'staging.head_rollback_requests accepted second consume update';
+        raise exception 'ops.head_rollback_requests accepted second consume update';
     end if;
 end;
 $$;

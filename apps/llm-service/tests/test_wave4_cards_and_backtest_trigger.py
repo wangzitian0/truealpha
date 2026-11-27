@@ -251,7 +251,7 @@ def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trig
     custom_body = custom_resp.json()
     assert custom_body["custom_definition_sha256"] and len(custom_body["custom_definition_sha256"]) == 64
     assert custom_body["exploratory"] is True
-    assert any("staging.pipeline_trigger_requests" in sql for sql, _ in recorded)
+    assert any("ops.pipeline_trigger_requests" in sql for sql, _ in recorded)
 
     import asyncio
     import json
@@ -381,7 +381,7 @@ def test_backtest_trigger_cli_uses_shared_contract(
     payload = json.loads(capsys.readouterr().out)
     assert payload["request_id"] == 99 and payload["dedupe_key"] == "cli-bt-1"
     assert payload["release_manifest_id"] == "release-manifest:cli-1" and payload["exploratory"] is False
-    assert seen and "staging.pipeline_trigger_requests" in seen[0]
+    assert seen and "ops.pipeline_trigger_requests" in seen[0]
 
 
 def test_fetch_issuer_basic_info_falls_back_to_cik_when_duplicate_uuid_is_deduplicated() -> None:

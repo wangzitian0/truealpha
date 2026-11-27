@@ -1097,7 +1097,7 @@ def test_fund_virtual_company_weights_conserved_passes_valid_row_and_fails_on_fa
 def test_persist_records_critical_and_fact_invariants_and_only_critical_fails(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Persist both critical and fact results into mart.output_invariant_results inside a transaction."""
+    """Persist both critical and fact results into ops.output_invariant_results inside a transaction."""
     from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
 
     run_id = _seed_head(
@@ -1137,7 +1137,7 @@ def test_persist_records_critical_and_fact_invariants_and_only_critical_fails(
     rows_fact = conn.execute(
         """
         select invariant_id, kind, population, violation_count, deferred, sample_rows
-        from mart.output_invariant_results
+        from ops.output_invariant_results
         where dagster_run_id = 'persist-wave4-fact-only'
         order by invariant_id
         """
@@ -1176,7 +1176,7 @@ def test_persist_records_critical_and_fact_invariants_and_only_critical_fails(
     rows_hard = conn.execute(
         """
         select invariant_id, kind, population, violation_count, deferred, sample_rows
-        from mart.output_invariant_results
+        from ops.output_invariant_results
         where dagster_run_id = 'persist-wave4-hard'
         order by invariant_id
         """
@@ -1234,7 +1234,7 @@ def test_ledger_runs_in_dagster_invariant_against_real_db(
     rows = conn.execute(
         """
         select invariant_id, kind, population, violation_count, sample_rows
-        from mart.output_invariant_results
+        from ops.output_invariant_results
         where dagster_run_id = 'ledger-h2-test'
         """
     ).fetchall()
