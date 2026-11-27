@@ -554,7 +554,7 @@ holding type.
      frozen as evidence, then dropped in #1730.
    - Add the graph and embedding export jobs.
 
-- `mart.issuer_basic_info`: selects `kind = 'issuer'` rows from `mart.entity_identity`, joins `staging.issuer_profiles` by `entity_id` or integer `cik` (keeping `source_fetch_id` linked to `raw.fetches`) and governed `mart.served_head`/`mart.metric_node_values`, deduplicates by zero-padded `cik`, ticker, or `entity_id`, and derives `primary_ticker` from primary US exchange listings (`xnas`, `xnys`, `arcx`, `bats`) before `current_ticker`, while unlinked counterparty entities retain `NULL` `cik` and `primary_ticker` (`20261126T1910_datahub_issuer_basic_info_dedup_v2.sql`).
+- `mart.issuer_basic_info`: selects `kind = 'issuer'` rows from `mart.entity_identity`, joins `staging.issuer_profiles` by `entity_id` or integer `cik` (keeping `source_fetch_id` linked to `raw.fetches`) and set-based `mkt_by_issuer` aggregations over governed `mart.served_head`/`mart.metric_node_values`, deduplicates by zero-padded `cik`, ticker, or `entity_id`, and derives `primary_ticker` from primary US exchange listings (`xnas`, `xnys`, `arcx`, `bats`) before `current_ticker`, while unlinked counterparty entities retain `NULL` `cik` and `primary_ticker` (`20261127T1520_datahub_issuer_basic_info_set_based_v3.sql`).
 
 ## 11. Standing checks
 
