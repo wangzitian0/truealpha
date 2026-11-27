@@ -109,4 +109,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from infra2_sdk.telemetry import worker_run
+
+    with worker_run("truealpha.strategy_smoke", strict=False):
+        raise SystemExit(main())

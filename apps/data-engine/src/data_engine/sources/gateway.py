@@ -139,8 +139,10 @@ def current_run_key() -> str | None:
 
 @contextmanager
 def script_run(name: str) -> Iterator[str]:
+    from infra2_sdk.telemetry import worker_run
+
     run_key = f"script:{name}:{int(_utcnow().timestamp())}"
-    with run_scope(run_key):
+    with worker_run(f"truealpha.{name}", strict=False), run_scope(run_key):
         yield run_key
 
 

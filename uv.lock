@@ -1005,15 +1005,15 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "4.12.0"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.12.0/infra2_sdk-4.12.0-py3-none-any.whl" }
+version = "4.13.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.0/infra2_sdk-4.13.0-py3-none-any.whl" }
 dependencies = [
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
     { name = "pydantic", version = "2.14.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.12.0/infra2_sdk-4.12.0-py3-none-any.whl", hash = "sha256:fdd4859cef76802a5f469c63613aa49640c6413829d4dda8b8aaabbf8ef2f547" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.0/infra2_sdk-4.13.0-py3-none-any.whl", hash = "sha256:7f348d6eab37a2e43640c425e9a5bbedc12f05e056f5512f81209df0a3889d5b" },
 ]
 
 [package.optional-dependencies]
@@ -2151,6 +2151,18 @@ wheels = [
 ]
 
 [[package]]
+name = "psycopg-pool"
+version = "3.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/5e/c0664b968b102ff68b811d999c728546c48d5c1eec03e3bbaf88c0cb4472/psycopg_pool-3.3.3.tar.gz", hash = "sha256:df87b5d9d0ad7db37f6cdad4fa8ce113d250f5997f6db38e9a99192fb67f9e1d", size = 32006, upload-time = "2026-09-22T15:53:24.947Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/b4/452c6607a0f479465cd8a9b0d9956919fcb150050c1f83f9f11e6b8ee8dc/psycopg_pool-3.3.3-py3-none-any.whl", hash = "sha256:9b9cd6a4fcec47a410f7e82d408540e7f77b478509e91b44c1a5457a13e5ff37", size = 40304, upload-time = "2026-09-22T15:53:23.712Z" },
+]
+
+[[package]]
 name = "psycopg2-binary"
 version = "2.9.12"
 source = { registry = "https://pypi.org/simple" }
@@ -3220,6 +3232,7 @@ dependencies = [
     { name = "bcrypt" },
     { name = "fastapi" },
     { name = "mcp" },
+    { name = "psycopg-pool" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "truealpha-contracts" },
@@ -3240,6 +3253,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.0.0" },
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "mcp", specifier = ">=1.30.0,<2" },
+    { name = "psycopg-pool", specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "pyjwt", specifier = ">=2.15.1" },
     { name = "truealpha-contracts", editable = "common/contracts" },
@@ -3277,7 +3291,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["http", "telemetry", "llm"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.12.0/infra2_sdk-4.12.0-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http", "telemetry", "llm"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.0/infra2_sdk-4.13.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "common/contracts" },
