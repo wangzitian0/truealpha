@@ -43,8 +43,7 @@ The single definition of the production reservation. Other tiers, skills and gat
    the agent that owns it merges it. That covers gate code, workflows and release code once
    the review that the Root section `Production reservation` requires is on the PR. That review
    is part of class 1. Production here (`docs/release-protocol.md`): the infra2 workflow
-   `reconcile-iac-inputs.yml` with `promote_prod=true` and the infra2 workflow `deploy.yml`
-   with `type=prod`. The owner-approval checks of those infra2 paths are part of the
+   `reconcile-iac-inputs.yml` with `promote_prod=true`. The owner-approval checks of those infra2 paths are part of the
    reservation itself.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
