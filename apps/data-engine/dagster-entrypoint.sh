@@ -23,6 +23,6 @@ export DAGSTER_POSTGRES_URL="${DATABASE_URL}?options=-csearch_path%3Ddagster"
 # The validator is the SDK's own. truealpha v0.2.132 deleted its `truealpha_runtime.boot` re-export,
 # and the SDK import also works in the images before it (that module imported the same function).
 # A failure exits non-zero here, so "set -e" stops the script before "exec".
-python -c "from infra2_sdk.config import assert_env; assert_env('apps/data-engine/required-env.generated.json', require_injected=True)"
+python -m infra2_sdk.config validate apps/data-engine/required-env.generated.json
 
 exec "$@"
