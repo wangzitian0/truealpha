@@ -1,8 +1,9 @@
-"""Falsifiable unit tests for tools/health_poll.py and runtime-hooks.manifest.json."""
+"""Falsifiable unit tests for runtime-hooks.manifest.json and SDK delivery health polling CLI."""
 
 from __future__ import annotations
 
-import importlib.util
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -12,20 +13,9 @@ from infra2_sdk.delivery import RuntimeHooksManifest, resolve_check_cells
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _load_health_poll():
-    spec = importlib.util.spec_from_file_location("health_poll", _REPO_ROOT / "tools" / "health_poll.py")
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    import sys
-
-    sys.modules["health_poll"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def test_default_http_get_sends_non_urllib_user_agent_and_no_redirect() -> None:
-    hp = _load_health_poll()
+def test_delivery_poll_cli_sends_non_urllib_user_agent_and_checks_version() -> None:
     seen_ua: list[str] = []
+    mode = ["200"]
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -36,7 +26,7 @@ def test_default_http_get_sends_non_urllib_user_agent_and_no_redirect() -> None:
                 self.end_headers()
                 self.wfile.write(b"cloudflare 403 blocked")
                 return
-            if self.path == "/redir":
+            if mode[0] == "redir":
                 self.send_response(302)
                 self.send_header("Location", "/api/health")
                 self.end_headers()
@@ -51,54 +41,71 @@ def test_default_http_get_sends_non_urllib_user_agent_and_no_redirect() -> None:
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        assert hp._default_http_get(f"http://127.0.0.1:{srv.server_port}/redir", 2.0)[0] == 302
-        rc = hp.main(
+        ok = subprocess.run(
             [
+                sys.executable,
+                "-m",
+                "infra2_sdk.delivery",
+                "poll",
                 "--url",
                 f"http://127.0.0.1:{srv.server_port}/api/health",
                 "--expected-version",
-                "v0.3.15",
+                "abcdef1",
                 "--timeout-seconds",
                 "2",
                 "--interval-seconds",
-                "0.5",
-            ]
+                "0.2",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        assert rc == 0
-        assert all(ua.startswith("infra2-sdk/") for ua in seen_ua)
+        assert ok.returncode == 0, ok.stderr
+        assert seen_ua and all(ua.startswith("infra2-sdk/") for ua in seen_ua)
+
+        mismatch = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "infra2_sdk.delivery",
+                "poll",
+                "--url",
+                f"http://127.0.0.1:{srv.server_port}/api/health",
+                "--expected-version",
+                "v0.3.99",
+                "--timeout-seconds",
+                "0.4",
+                "--interval-seconds",
+                "0.2",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert mismatch.returncode != 0
+
+        mode[0] = "redir"
+        redir = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "infra2_sdk.delivery",
+                "poll",
+                "--url",
+                f"http://127.0.0.1:{srv.server_port}/api/health",
+                "--timeout-seconds",
+                "0.4",
+                "--interval-seconds",
+                "0.2",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert redir.returncode != 0
     finally:
         srv.shutdown()
         srv.server_close()
-
-
-def test_poll_until_healthy_version_matching_and_timeout() -> None:
-    hp = _load_health_poll()
-    now = [0.0]
-    responses = [
-        (200, b'{"version":"v0.3.14"}'),
-        (200, b'{"version":"v0.3.14","git_sha":"abcdef1234567890"}'),
-    ]
-    res = hp.poll_until_healthy(
-        "https://truealpha-staging.truealpha.club/api/health",
-        expected_version="abcdef1",
-        timeout_seconds=10.0,
-        interval_seconds=1.0,
-        http_get=lambda _u, _t: responses.pop(0),
-        monotonic=lambda: now[0],
-        sleep=lambda s: now.__setitem__(0, now[0] + s),
-    )
-    assert res.ok is True and res.attempts == 2
-
-    fail_res = hp.poll_until_healthy(
-        "https://truealpha-staging.truealpha.club/api/health",
-        expected_version="v0.3.15",
-        timeout_seconds=2.0,
-        interval_seconds=1.0,
-        http_get=lambda _u, _t: (200, b'{"version":"v0.3.14"}'),
-        monotonic=lambda: now[0],
-        sleep=lambda s: now.__setitem__(0, now[0] + s),
-    )
-    assert fail_res.ok is False and "version mismatch" in fail_res.detail
 
 
 def test_runtime_hooks_manifest_smoke_and_health_cells() -> None:
@@ -106,5 +113,5 @@ def test_runtime_hooks_manifest_smoke_and_health_cells() -> None:
     by_id = {row.id: row for row in manifest.checks}
     assert resolve_check_cells(by_id["smoke"]) == ("preview.operation", "staging.operation", "prod.operation")
     assert resolve_check_cells(by_id["health"]) == ("preview.post", "staging.post", "prod.post")
-    assert "tools/health_poll.py" in " ".join(by_id["smoke"].argv)
-    assert "tools/health_poll.py" in " ".join(by_id["health"].argv)
+    assert "infra2_sdk.delivery poll" in " ".join(by_id["smoke"].argv)
+    assert "infra2_sdk.delivery poll" in " ".join(by_id["health"].argv)

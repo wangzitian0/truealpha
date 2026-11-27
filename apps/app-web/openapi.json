@@ -1299,7 +1299,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/_ProbeResponse"
+                  "$ref": "#/components/schemas/ProbeResponse"
                 }
               }
             }
@@ -1320,7 +1320,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/_ProbeResponse"
+                  "$ref": "#/components/schemas/ProbeResponse"
                 }
               }
             }
@@ -1330,7 +1330,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/_ProbeResponse"
+                  "$ref": "#/components/schemas/ProbeResponse"
                 }
               }
             }
@@ -1351,7 +1351,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/_HealthResponse"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             }
@@ -1361,7 +1361,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/_HealthResponse"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             }
@@ -2017,6 +2017,35 @@
           "strategy_summary"
         ],
         "title": "CardKind"
+      },
+      "CheckDetail": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "detail",
+          "duration_ms",
+          "required"
+        ],
+        "title": "CheckDetail"
       },
       "CoverageDecisionDto": {
         "properties": {
@@ -2927,6 +2956,51 @@
         ],
         "title": "HeadRollbackResponse"
       },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "git_sha": {
+            "type": "string",
+            "title": "Git Sha"
+          },
+          "checks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CheckDetail"
+            },
+            "type": "object",
+            "title": "Checks"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version",
+          "git_sha",
+          "checks",
+          "reasons"
+        ],
+        "title": "HealthResponse"
+      },
       "InputEvidenceStatus": {
         "type": "string",
         "enum": [
@@ -3626,6 +3700,39 @@
           "available"
         ],
         "title": "PanelCoverageResponse"
+      },
+      "ProbeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasons"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "service"
+        ],
+        "title": "ProbeResponse"
       },
       "RankingsResponse": {
         "properties": {
@@ -5004,113 +5111,6 @@
           "node_key"
         ],
         "title": "WidePanelCellDto"
-      },
-      "_CheckDetail": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
-          },
-          "duration_ms": {
-            "type": "number",
-            "title": "Duration Ms"
-          },
-          "required": {
-            "type": "boolean",
-            "title": "Required"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "status",
-          "detail",
-          "duration_ms",
-          "required"
-        ],
-        "title": "_CheckDetail"
-      },
-      "_HealthResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "service": {
-            "type": "string",
-            "title": "Service"
-          },
-          "version": {
-            "type": "string",
-            "title": "Version"
-          },
-          "git_sha": {
-            "type": "string",
-            "title": "Git Sha"
-          },
-          "checks": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/_CheckDetail"
-            },
-            "type": "object",
-            "title": "Checks"
-          },
-          "reasons": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Reasons"
-          }
-        },
-        "additionalProperties": true,
-        "type": "object",
-        "required": [
-          "status",
-          "service",
-          "version",
-          "git_sha",
-          "checks",
-          "reasons"
-        ],
-        "title": "_HealthResponse"
-      },
-      "_ProbeResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "service": {
-            "type": "string",
-            "title": "Service"
-          },
-          "reasons": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reasons"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "status",
-          "service"
-        ],
-        "title": "_ProbeResponse"
       }
     }
   }

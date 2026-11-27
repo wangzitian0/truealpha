@@ -1308,14 +1308,14 @@ def test_environment_tier_helpers_converged() -> None:
 
 
 def test_llm_agent_binds_llm_call_context_and_preserves_replay_bytes(call_ledger, monkeypatch) -> None:
+    import structlog
     from data_engine.sources import llm
-    from infra2_sdk import llm as sdk_llm
 
     seen_ctx: list[dict[str, object]] = []
     sent_bodies: list[bytes] = []
 
     def fake_transport(_url: str, _headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
-        seen_ctx.append(dict(sdk_llm._LLM_CONTEXT.get() or {}))
+        seen_ctx.append(structlog.contextvars.get_contextvars())
         sent_bodies.append(body)
         return (
             200,
