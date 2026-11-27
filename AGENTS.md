@@ -1,34 +1,10 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=d31e58d39b4f7cd00b920161828f00006291acdff948428cc51bd9ea1d447daa -->
-<!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
+# TrueAlpha Agent Contract
 
-## Engineering discipline
-
-- **Measure the physical system first.** Inspect the system with read-only probes (`time cmd`, process chains, file locks) before proposing architecture. Never combine validation and mutation in one command. Measure, read the result, then decide.
-- **Green does not prove truth.** The tested system writes its own unit tests, CI, and issue states. Cross-check critical conclusions against two external sources not written by this repository.
-- **Classify checks (`Gate -> Dependency -> Fact -> None`).** Keep falsifiable tests for security or release gates; report drift and metrics on the Fact Board. Never hide assertions inside `if` branches, match prose with `indexOf`, or shadow test names.
-- **Falsifiable documentation and assertions:** State test requirements, error messages, and specifications in concrete ASD-STE100 terms without vague qualifiers.
-- **One source of truth:** Keep one authoritative definition per core fact. Repeated hardcoding and scattered configuration invite drift.
-- **Clean up during migration:** After the new mechanism is live and equivalence is proved, remove its predecessor, obsolete files, and dead code in the same change. Define contracts first and derive CI from them.
-- **Deletion can leave guards green and empty:** A guard for an old structure can stop checking anything after deletion. Check each guard and remove it or redirect it to the new structure; green tests alone do not prove safe deletion.
-- **Fix an owner hold by deletion:** Delete the rule or gate branch that holds non-production work. Do not add logic that reads a command to permit it. Such logic lets unsafe commands through.
-- **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
-- **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
-- **Local and remote test segregation:** Before a PR, run only the focused tests of the change in one process (`pytest <file>::<test> -x`). The full suite, parallel runs and coverage run on remote CI only.
-- **Bounded file reads:** Pass `StartLine` and `EndLine` (`<= 800` lines per call) when reading existing files with `read_file` or `view_file`.
-
-## Delivery and merge
-
-- **ASD-STE100 specification for all artifacts:** Write committed artifacts, rules, code, comments, commits, and docs in ASD-STE100 English. Keep instructions `<= 20` words and descriptions `<= 25` words in active voice without vague qualifiers. Operational skills (`skills/**/SKILL.md`) follow the target repository's language policy.
-- **Deliverable format:** Deliver a mergeable PR or a traceable issue, rather than a process-only report. Use issues and PRs as the collaboration bus. Search for an existing similar issue before creating one; update it if it exists. Write a new issue to the issue form of its type in `.github/ISSUE_TEMPLATE/` of the repository, else of its owner's `.github` repository.
-- **Fail fast left to right:** Put the cheapest and likeliest failure checks first.
-- **Review standing authorization:** Resolve a review thread after verifying in source code (not redacted diffs) that it is fixed or obsolete. Never resolve actionable or unverified feedback. Turn false reports into falsifiable invariant tests.
-- **Weighted review gates:** Each repository defines its own severity weights and blocking thresholds. Read literal `severity: <level>` tags; do not infer severity from prose.
-- **Merge when ready:** Once all merge conditions pass, merge and continue from the latest main rather than piling up divergent branches.
-- **Conflict-free merge window:** Merge conflict-free PRs (`mergeable=MERGEABLE`) within 24 hours of `main` without rebasing; post-merge CI validates `main`. Rebase on conflicts or after 24 hours.
-- **Delivery state invariant:** Never declare complete, done, or finished before merge to main and a verified Business Reality Probe (`ws-delivery-status`). State labels are `'Draft'`, `'Local verified'`, `'In review'`, `'Stage 1 Landed'`, and `'VERIFIED_COMPLETE'`.
-- **Anti-exclusion and reality invariant:** Exclusion is not resolution. Never exclude failing entities or add exemptions to manufacture green checks. A task is complete only when a physical reality probe confirms non-empty execution.
-- **Three-stage deployment prerequisite:** Stage 1 (merge to main) is a non-bypassable physical prerequisite for Stage 2 (staging) and Stage 3 (production). If HEAD is not on main, fail closed and refuse any deployment request.
-- **Deploy provenance invariant:** Before dispatching any deploy workflow, physically verify that the target ref or tag contains current branch commits (`git merge-base --is-ancestor HEAD <target>`). Never deploy an older tag as completion evidence for current work.
+> **Rule source**: This repository owns its own `AGENTS.md` directly.
+> **Repository language**: Code, commits, branches, pull requests, and issues are written
+> in English. User-facing conversation may follow the user's language.
+> **Architecture authority**: `init.md` is the sole authority for architecture, public
+> contracts, and product scope.
 
 ## Production reservation
 
@@ -40,28 +16,11 @@ The single definition of the production reservation. Other tiers, skills and gat
 - **Everything else is the agent's:** in any repository the owner owns, every non-production change (including `dev_env` outside the self-guard), staging and canary deploy, release tag, rule text, skill, gate/release code, and required-check edit. Before merging gate or release code, an independent read-only reviewer inspects the head SHA and states whether the gate gets stricter, equal or looser. A looser edit in the self-guard follows the self-guard.
 - **Every other hold is a defect:** a rule, skill, label or gate holding non-production work for the owner is a defect. Do the work, then fix the hold. `ws_owner_scope` fails on it.
 
-## Runtime safety
-
-- **Reason from the worst case.** For environment changes, wrappers, redirection, or interception rules, check for no-TTY deadlock in CI or child processes, concurrent shared-file truncation/races, and network or cold-start failure cascades. Reject a proposal whose lack of backlash cannot be established.
-- **Treat three hidden green failures as defects:** WRONG FORMULA (an incorrect formula passes assertions), GREEN-WHILE-EMPTY (filtering removes all output but reports success), and STALE-REPORTED-AS-FRESH (old data is labeled fresh). Implausible output is evidence of a defect.
-- **Protect ambient services.** Default unit tests and subagent tasks must not destructively act on host ports, shared background processes, or development databases (`DROP`, `TRUNCATE`, `--clear`, forced restart). Resets require an isolated sandbox/worktree with a dedicated random port, or an explicit `CI=true` or `ALLOW_CLEAR_TEST=1` guard; otherwise skip safely with a warning.
-- **Two triggers:** Every background job or batch process needs both scheduled execution and manual replay.
-- **Do not steal CD locks:** A trigger is instant but publication is delayed. Do not interrupt a running deployment; the next run must coalesce commits accumulated while it was busy.
-
-# TrueAlpha Agent Contract
-
-> **Rule source**: This file is generated. Change its dev_env source and pass the rule-text checklist; do not hand-edit it.
-> **Repository language**: Code, commits, branches, pull requests, and issues are written
-> in English. User-facing conversation may follow the user's language.
-> **Architecture authority**: `init.md` is the sole authority for architecture, public
-> contracts, and product scope.
-
 ## How work happens
 
 1. **One issue, one PR.** Every PR binds exactly one issue. The issue can be an umbrella issue.
    Use `Closes #N` when the merge completes the issue. Use `Refs #N` when staging evidence or
-   other PRs remain. An automatic rule-render PR (`ws-render-pr`) binds to the dev_env commit
-   that its body names. Keep PRs small and reviewable.
+   other PRs remain. Keep PRs small and reviewable.
 2. **Issues are the shared coordination surface.** Record verified findings, decisions, and
    next actions on the issue as you learn them.
 3. **Parallel agents** work on disjoint files. Prefix issue and PR titles with your workspace
@@ -111,7 +70,7 @@ branch, and target files. On handoff, post done, verified, next, and failed item
 
 - **Secrets:** Never commit `.env`, `*.pem`, tokens, credentials, account IDs, or private hosts; redact live outputs.
 - **PIT & Restatements:** Distinguish `valid_time` from `transaction_time` (from source property, never insertion clock; `recorded_at` is ingestion-audit only). Never derive universe sizes, denominators, or freshness as constants (#539). Restatements insert rows with `is_restatement` + `mapping_version`; never update in place. Select `mart` assertions by `source_priority`, never latest row.
-- **Factors & Storage:** All computation lives in `common/factors` over provenance-neutral inputs (no vendor branching; composite confidence `<= min` consumed; continuous `0-100` LLM score; `numeric` for money). Consumers read `mart.served_head` (never mutable `latest`). LLM/Web surfaces use read-only `mart` queries (`mart_readonly`), never raw/staging or S3 paths; replay never calls models.
+- **Factors & Storage:** All computation lives in `common/factors` over provenance-neutral inputs (no vendor branching; composite confidence `<= min` consumed; continuous `0-100` LLM score; `numeric` for money). Consumers read `mart.served_head` (never mutable `latest`). `apps/app-web` holds zero database drivers and reads no database or S3 paths — it calls `apps/llm-service` HTTP endpoints; `apps/llm-service` uses read-only `mart` queries (`mart_readonly`), never raw/staging or S3 paths; replay never calls models. Skills live in `.agents/skills/` (mirrored in `.claude/skills/`).
 - **Moomoo & Gateways:** All vendor/LLM calls go through the source gateway + `api_call_ledger`. Moomoo is Quote API read-only (all order/trading/unlock operations forbidden; rejected in CI).
 
 ## Environments and load on demand
@@ -121,4 +80,3 @@ Target topology: Local (`make runtime-up`), GitHub CI, Staging (`infra2` release
 - Checks: `make check FILES=<test paths>` runs the static checks on the changed files and the named tests.
 - Vendor specifics: `yfinance` is zero-quota base (lower confidence `Low` when single-source; key `(listing, session_date)`); N-PORT positions use CUSIP/ISIN resolved via OpenFIGI into the entity store (`staging.entities`, `staging.entity_aliases`, `staging.entity_relations`).
 - Run the narrowest relevant tests first (`make test-python FILES=<test paths>`). CI runs the full suite. Report what was not run and why.
-<!-- WS_STATIC_END -->

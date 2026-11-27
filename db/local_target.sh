@@ -81,11 +81,11 @@ esac
 redacted="${redacted}/${database}"
 
 # The VPS publishes its Postgres containers on the VPS's own loopback: production on
-# 15433 and staging on 15432 (AGENTS.md, "Environments and load on demand"). An operator
+# 15433 and staging on 15432 (`init.md` / `infra2`). An operator
 # reaches them through an SSH tunnel, so on the operator's machine the DSN reads
 # `127.0.0.1:15433` and the host test below calls it local, while the database behind it
 # is production. The host cannot tell the two apart. The port can: no local database in
-# this repository uses either port (compose publishes 5432), so a DSN that names one is
+# this repository uses either port (compose publishes 55432), so a DSN that names one is
 # a deployed server whatever its host says. It stays reachable the way every remote
 # target does, through the caller's explicit override, which says the operator means it.
 #

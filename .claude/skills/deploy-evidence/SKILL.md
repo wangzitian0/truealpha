@@ -23,14 +23,14 @@ gh run list -R wangzitian0/infra2 --workflow reconcile-iac-inputs.yml --branch v
 gh run list -R wangzitian0/infra2 --workflow deploy.yml --limit 5
 
 # 2. If running directly on the VPS host via SSH, verify container image digests:
-docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
+docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
 docker inspect -f '{{.Config.Image}}' truealpha-web-staging
 docker inspect -f '{{.Config.Image}}' truealpha-llm-staging
 ```
 
 ### Step 2: Dagster & Runtime Liveness Proof
-Confirm live service health (`git_sha` and `governed_pointers` in `/api/health`) and daemon heartbeat (on VPS host: `docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check`).
+Confirm live service health (`git_sha` and `governed_pointers` in `/api/health`) and verify daemon container status/PostgreSQL heartbeat (do NOT run `dagster-daemon liveness-check`, which spawns a heavy cold CLI start).
 
 ### Step 3: Deployed Execution Proof (Reachable Path)
 Verify that the capability was invoked via a deployed path. A deployed path is reachable from the Dagster composition root (`dagster_defs.py`) or a deployed service/App entrypoint:

@@ -10,7 +10,7 @@ The values themselves are not secret; where they belong is the point. A local-de
 convenience that is also the production FALLBACK is not a convenience, it is an
 unconfigured environment that looks configured. So they live here, in the test harness,
 where they cannot be reached by a deployed process. CI sets the same three explicitly in
-`ci-python.yml` and `ci-runtime.yml`; this file is what keeps `uv run pytest` working on a
+`ci-python.yml`; this file is what keeps `uv run pytest` working on a
 developer's machine without re-introducing a shipped default.
 """
 

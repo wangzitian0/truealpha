@@ -17,15 +17,9 @@ the dependency instances and which tiers require each service remain TrueAlpha-o
 
 - Six logical tiers model dependency substitution: `local_dev`, `local_test`,
   `github_ci`, `preview`, `staging`, and `production`.
-- The target rollout uses four actual environments: Local (covering both local
-  tiers), GitHub CI, Staging, and Production. This is a target topology, not a
-  readiness claim.
+- The deployed topology covers Local, GitHub CI, Preview (per-PR review via `infra2`), Staging, and Production.
 - Local and GitHub CI use app-owned Compose PostgreSQL + RustFS (S3 API).
-- Persistent Staging enters during Gate 1. Production is initialized only as an
-  isolated Gate 4 shadow and remains non-authoritative until deployed-consumer,
-  natural-cadence SLO, curated-universe, and human-graduation evidence pass. Both
-  receive isolated `DATABASE_URL` and `S3_*` values from infra2/Vault.
-- Preview remains unprovisioned until the Web application needs per-PR visual review.
+- Preview, Staging, and Production receive isolated `DATABASE_URL` and `S3_*` values from infra2/Vault (Production stays isolated behind explicit promotion evidence).
 - `python -m truealpha_runtime.cli check --live` asserts all declared runtime
   dependencies; absence is a failure, never a silent fallback.
 
