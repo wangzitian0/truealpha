@@ -20,7 +20,12 @@ on:
         required: true
         type: boolean
       prebuilt:
-        description: The caller already proved every selected image builds at this SHA; skip the build job.
+        description: The caller already built, smoke-tested, and pushed ci-sha candidate images at this SHA; skip the build job.
+        required: false
+        type: boolean
+        default: false
+      publish_candidate:
+        description: Push an immutable ci-sha candidate image during build so publish can retag without rebuilding.
         required: false
         type: boolean
         default: false
@@ -74,6 +79,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -90,7 +96,43 @@ jobs:
         run: sleep 20
       - if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v3
+      - name: Resolve candidate ref
+        if: inputs.publish_candidate || inputs.publish
+        id: candidate
+        env:
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          repo_lc="$(printf '%s' "$IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]' | cut -c1-7)"
+          echo "ref=${repo_lc}:ci-sha-${short_sha}" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        if: inputs.publish_candidate || inputs.publish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push candidate ${{ matrix.image }}
+        if: inputs.publish_candidate || inputs.publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.candidate.outputs.ref }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: mode=max
+          sbom: true
+      - name: Pull candidate ${{ matrix.image }} for smoke tests
+        if: inputs.publish_candidate || inputs.publish
+        run: |
+          set -euo pipefail
+          docker pull "${{ steps.candidate.outputs.ref }}"
+          docker tag "${{ steps.candidate.outputs.ref }}" "ci-image-check/${{ matrix.image }}:build"
       - name: Build ${{ matrix.image }}
+        if: "!inputs.publish_candidate && !inputs.publish"
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -151,53 +193,47 @@ jobs:
   # `!cancelled()` rather than the implicit success(): with `prebuilt` the build job is
   # skipped by design, and a job that `needs` a skipped job is itself skipped unless its
   # condition says otherwise. The condition then spells out the only two ways in: every
-  # image built here, or the caller vouched for the build and none ran here. A failed
-  # or cancelled build is neither.
+  # image built and pushed its candidate here, or the caller vouched for the build and none
+  # ran here. Promote/retag the exact ci-sha candidate digest without rebuilding.
   publish:
     if: >-
       !cancelled() && inputs.publish && !inputs.promote && needs.plan.outputs.has_images == 'true' &&
       (needs.build.result == 'success' || (inputs.prebuilt && needs.build.result == 'skipped'))
     needs: [plan, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
-      # Docker Hub retry: see the build job.
-      - id: buildx
-        uses: docker/setup-buildx-action@v3
-        continue-on-error: true
-      - if: steps.buildx.outcome == 'failure'
-        run: sleep 20
-      - if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
-            type=sha,prefix=,format=short
-      - name: Publish ${{ matrix.image }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          provenance: mode=max
-          sbom: true
+      - name: Promote candidate ${{ matrix.image }} to release tags
+        env:
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          IS_DEFAULT_BRANCH: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        run: |
+          set -euo pipefail
+          repo_lc="$(printf '%s' "$IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]' | cut -c1-7)"
+          source_ref="${repo_lc}:ci-sha-${short_sha}"
+          if ! docker buildx imagetools inspect "$source_ref" >/dev/null 2>&1; then
+            echo "::error::${source_ref} is not published; build must push candidate first" >&2
+            exit 1
+          fi
+          tag_args=(--tag "${repo_lc}:sha-${short_sha}" --tag "${repo_lc}:${short_sha}")
+          if [ "$IS_DEFAULT_BRANCH" = "true" ]; then
+            tag_args+=(--tag "${repo_lc}:latest")
+          fi
+          docker buildx imagetools create "${tag_args[@]}" "$source_ref"
+          docker buildx imagetools inspect "${repo_lc}:sha-${short_sha}" >/dev/null
 
   # A release tag gets the bytes that main published and the preview gate tested (#1878).
   # A rebuild here gave the tag a new, untested digest and moved the sha tag to it.
@@ -206,8 +242,9 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # No permissions block: the job inherits the caller grant. A called job that asks for
-    # more than a caller grants fails the whole run at startup (images_build grants read).
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}

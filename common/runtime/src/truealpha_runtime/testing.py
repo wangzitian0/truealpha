@@ -1,7 +1,6 @@
 """Test helpers for tools, isolated databases, and OTLP."""
 
 import copy
-import importlib.util
 import json
 import os
 import re
@@ -14,7 +13,6 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -29,21 +27,7 @@ SeedValue = str | int | bool | None
 
 REQUIRE_RUNTIME_ENV = "TRUEALPHA_REQUIRE_RUNTIME"
 REPO_ROOT = Path(__file__).resolve().parents[4]
-TOOLS = REPO_ROOT / "tools"
 DB_DIR = REPO_ROOT / "db"
-
-
-def load_tool(name: str) -> ModuleType:
-    path = TOOLS / f"{name}.py"
-    if not path.exists():
-        raise FileNotFoundError(f"no tool named {name!r} in {TOOLS}")
-    spec = importlib.util.spec_from_file_location(f"truealpha_tool_{name}", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return sys.modules.get(spec.name, module)
 
 
 def skip_or_fail(reason: str) -> None:

@@ -218,10 +218,14 @@ def test_a_tag_push_promotes_and_never_builds_and_push_builds_once() -> None:
         assert "github.ref_type != 'tag'" in req[name]["if"], name
     build_job = req["images_build"]
     assert build_job["needs"] == "changes"
-    assert build_job["permissions"] == {"contents": "read"}
+    assert build_job["permissions"] == {"contents": "read", "packages": "write"}
     assert "github.event_name == 'push'" in build_job["if"]
     assert "github.ref == 'refs/heads/main'" in build_job["if"]
     assert build_job["with"]["publish"] is False
+    candidate_expr = str(build_job["with"]["publish_candidate"])
+    assert "github.event_name == 'push'" in candidate_expr
+    assert "github.ref == 'refs/heads/main'" in candidate_expr
+    assert "inputs.force_images" in candidate_expr
     for img_input in ("app_web", "llm_service", "data_engine"):
         expr = str(build_job["with"][img_input])
         assert "github.event_name == 'push'" in expr
@@ -231,7 +235,9 @@ def test_a_tag_push_promotes_and_never_builds_and_push_builds_once() -> None:
     assert release_job["needs"] == ["changes", "security", "db", "python", "web", "images_build"]
     assert "needs.images_build.result == 'success'" in release_job["if"]
     assert "needs.images_build.result == 'skipped'" not in release_job["if"]
-    assert release_job["with"]["prebuilt"] == "${{ github.event_name == 'push' }}"
+    prebuilt_expr = str(release_job["with"]["prebuilt"])
+    assert "github.event_name == 'push'" in prebuilt_expr
+    assert "inputs.force_images" in prebuilt_expr
     assert release_job["with"]["publish"] is True
 
     promote_job = req["images_promote"]
@@ -241,13 +247,33 @@ def test_a_tag_push_promotes_and_never_builds_and_push_builds_once() -> None:
     for name in ("build", "publish"):
         assert "!inputs.promote" in images[name]["if"], name
     assert "inputs.promote" in images["promote"]["if"]
+
+    build_steps = images["build"]["steps"]
+    candidate_build = next(s for s in build_steps if s.get("name", "").startswith("Build and push candidate"))
+    assert candidate_build["with"]["push"] is True
+    assert candidate_build["with"]["provenance"] == "mode=max"
+    assert candidate_build["with"]["sbom"] is True
+    pr_build = next(s for s in build_steps if s.get("name") == "Build ${{ matrix.image }}")
+    assert pr_build["with"]["push"] is False
+    assert pr_build["with"]["load"] is True
+    build_runs = "\n".join(str(s.get("run", "")) for s in build_steps)
+    assert ":ci-sha-" in build_runs
+    assert "docker pull" in build_runs
+
+    publish_steps = images["publish"]["steps"]
+    assert not [s for s in publish_steps if "build-push-action" in str(s.get("uses", ""))]
+    publish_runs = "\n".join(str(s.get("run", "")) for s in publish_steps)
+    assert ":ci-sha-" in publish_runs
+    assert ":sha-" in publish_runs
+    assert ":latest" in publish_runs
+    assert "docker buildx imagetools create" in publish_runs
+    assert "docker buildx imagetools inspect" in publish_runs
+
     promote_runs = "\n".join(str(step.get("run", "")) for step in images["promote"]["steps"])
     assert "docker buildx imagetools create" in promote_runs
     assert "docker buildx imagetools inspect" in promote_runs
     assert "promote_release_image.py" not in promote_runs
     assert not [s for s in images["promote"]["steps"] if "build-push-action" in str(s.get("uses", ""))]
-    publish_tags = "\n".join(str(step.get("with", {}).get("tags", "")) for step in images["publish"]["steps"])
-    assert "type=semver" not in publish_tags
 
 
 def test_no_called_job_asks_for_more_than_any_caller_grants() -> None:
@@ -271,6 +297,18 @@ def test_pr_image_filters_are_scoped_and_ci_web_and_python_use_speedups() -> Non
     assert "apps/data-engine/**" not in filters["image_data_engine"]
     assert "apps/app-web/**" not in filters["image_app_web"]
     assert "apps/llm-service/**" not in filters["image_llm_service"]
+    for removed in ("apps/app-web/src/**", "apps/app-web/public/**"):
+        assert removed not in filters["image_app_web"]
+    for removed in (
+        "apps/llm-service/src/**",
+        "apps/data-engine/src/**",
+        "common/contracts/src/**",
+        "common/factors/src/**",
+        "common/runtime/src/**",
+        "db/migrations/**",
+    ):
+        assert removed not in filters["image_llm_service"]
+        assert removed not in filters["image_data_engine"]
     assert "apps/data-engine/Dockerfile*" in filters["image_data_engine"]
 
     ci_web = yaml.safe_load((WORKFLOWS / "ci-web.yml").read_text(encoding="utf-8"))

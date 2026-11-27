@@ -24,7 +24,6 @@ truealpha-runtime = { workspace = true }
 python_version = "3.12"
 files = [
     "apps/data-engine/src",
-    "apps/data-engine/scripts",
     "apps/llm-service/src",
     "apps/llm-service/scripts",
     "common/contracts/src",

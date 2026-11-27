@@ -23,7 +23,7 @@ def _run_probes(checks: tuple[_ProbeCheck, ...]) -> tuple[ProbeResult, ...]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate TrueAlpha runtime dependencies")
-    parser.add_argument("check", nargs="?", choices=("check", "health-check", "ensure-bucket"), default="check")
+    parser.add_argument("check", nargs="?", choices=("check", "ensure-bucket"), default="check")
     parser.add_argument("--live", action="store_true", help="probe PostgreSQL, KG tables, and object storage")
     args = parser.parse_args(argv)
     settings = RuntimeSettings()
@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"object_storage: bucket {settings.s3_bucket} ready")
         return 0
-    if not args.live and args.check != "health-check":
+    if not args.live:
         return 0
     checks: tuple[_ProbeCheck, ...] = (DatabaseCheck(settings), GraphStoreCheck(settings), ObjectStorageCheck(settings))
     results = _run_probes(checks)
