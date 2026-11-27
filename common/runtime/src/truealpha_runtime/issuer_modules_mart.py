@@ -102,7 +102,10 @@ __all__ = [
 _IDENTITY_MATCH_SQL = (
     "ei.entity_id::text = lower(inp.q) or ei.legacy_id = inp.q or upper(ei.legacy_id) = upper(inp.q)"
     " or upper(ei.current_ticker) = upper(inp.q)"
-    " or (inp.q ~* '^listing:[0-9a-z]{4}:[0-9a-z.\\-]+$' and upper(ei.current_ticker) = upper(split_part(inp.q, ':', 3)))"
+    " or (ei.listing_id is not null and upper(split_part(ei.listing_id, ':', 3)) = upper(inp.q))"
+    " or (inp.q ~* '^listing:[0-9a-z]{4}:[0-9a-z.\\-]+$'"
+    "     and (upper(ei.current_ticker) = upper(split_part(inp.q, ':', 3))"
+    "          or lower(ei.listing_id) = lower(inp.q)))"
     " or (regexp_replace(inp.q, '^(?:issuer:cik:|company:cik:|cik:)', '', 'i') ~ '^[0-9]{1,10}$'"
     "     and ei.cik = lpad(regexp_replace(inp.q, '^(?:issuer:cik:|company:cik:|cik:)', '', 'i'), 10, '0'))"
     " or upper(ei.lei) = upper(regexp_replace(inp.q, '^(?:issuer:lei:|company:lei:|lei:)', '', 'i'))"
@@ -117,7 +120,7 @@ def issuer_identity_sql(column: str, placeholder: str = "%s") -> str:
 
 
 _RESOLVE_BATCH_CANDIDATES_SQL = (
-    f"select u.raw_q, ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei "
+    f"select u.raw_q, ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei, ei.listing_id "
     f"from unnest(%s::text[]) as u(raw_q) cross join lateral (select btrim(u.raw_q) as q) inp join mart.entity_identity ei on ({_IDENTITY_MATCH_SQL})"
 )
 ENTITY_DISPLAY_SQL = (
@@ -196,9 +199,13 @@ _ANALYST_RATINGS_BY_IDS_SQL = _module_sql(
 
 
 def _append_resolved_candidates(target: list[str], row: dict[str, Any]) -> None:
-    for k in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
+    for k in ("entity_id", "legacy_id", "current_ticker", "cik", "lei", "listing_id"):
         if isinstance(v := row.get(k), str) and v and v not in target:
             target.append(v)
+    if isinstance(lid := row.get("listing_id"), str) and ":" in lid:
+        parts = lid.split(":")
+        if len(parts) >= 3 and (listing_ticker := parts[2].strip().upper()) and listing_ticker not in target:
+            target.append(listing_ticker)
     for pre, k in (("issuer:cik:", "cik"), ("company:cik:", "cik"), ("issuer:lei:", "lei")):
         if (v := row.get(k)) and f"{pre}{v}" not in target:
             target.append(f"{pre}{v}")

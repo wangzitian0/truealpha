@@ -293,3 +293,28 @@ def test_resolve_issuer_id_candidates_batch_propagates_db_errors(monkeypatch: py
     )
     with pytest.raises(psycopg.OperationalError, match="down"):
         issuer_modules_mart.resolve_issuer_id_candidates_batch("postgresql://unused", ["NVDA"])
+
+
+def test_identity_match_and_candidate_expansion_include_listing_id_ticker() -> None:
+    from truealpha_runtime.issuer_modules_mart import _IDENTITY_MATCH_SQL, _append_resolved_candidates
+
+    assert "split_part(ei.listing_id, ':', 3)" in _IDENTITY_MATCH_SQL
+    assert "lower(ei.listing_id) = lower(inp.q)" in _IDENTITY_MATCH_SQL
+    target: list[str] = ["GOOGL"]
+    _append_resolved_candidates(
+        target,
+        {
+            "entity_id": "ffb3fc08-5a47-56e1-8a6f-a376c8087ed1",
+            "legacy_id": "company:cik:1652044",
+            "current_ticker": "GOOG",
+            "cik": "0001652044",
+            "lei": "5493006MHB84DD0ZWV18",
+            "listing_id": "listing:xnas:googl",
+        },
+    )
+    assert "listing:xnas:googl" in target
+    assert "issuer:cik:0001652044" in target
+    assert "ffb3fc08-5a47-56e1-8a6f-a376c8087ed1" in target
+    target_asml: list[str] = ["0000937966"]
+    _append_resolved_candidates(target_asml, {"listing_id": "listing:xnas:asml"})
+    assert "ASML" in target_asml
