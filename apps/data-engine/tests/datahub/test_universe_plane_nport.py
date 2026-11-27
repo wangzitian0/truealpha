@@ -22,16 +22,17 @@ pytestmark = pytest.mark.deps
 def _insert_raw_fetch(
     connection: psycopg.Connection[Any],
     *,
-    source: DataSource,
+    source: DataSource | str,
     record_id: str,
     sha256: str,
     fetched_at: datetime,
 ) -> int:
+    src_val = source.value if isinstance(source, DataSource) else source
     row = connection.execute(
         "insert into raw.fetches"
         " (source, source_record_id, payload_sha256, object_uri, content_type, byte_length, fetched_at, recorded_at)"
         " values (%s, %s, %s, %s, 'application/json', 2, %s, %s) returning id",
-        (source.value, record_id, sha256, f"s3://truealpha-raw/test/{record_id}", fetched_at, fetched_at),
+        (src_val, record_id, sha256, f"s3://truealpha-raw/test/{record_id}", fetched_at, fetched_at),
     ).fetchone()
     assert row is not None
     return int(row[0])
@@ -48,7 +49,7 @@ def test_qqq_build_denominator_and_confidence_prefer_active_nport_source_over_ne
     nport_time = datetime(2026, 8, 28, 20, 0, tzinfo=UTC)
     legacy_fetch = _insert_raw_fetch(
         connection,
-        source=DataSource.NASDAQ_INDEX,
+        source="nasdaq-index",
         record_id="test-legacy-qqq-1820",
         sha256="a" * 64,
         fetched_at=legacy_time,
@@ -66,7 +67,7 @@ def test_qqq_build_denominator_and_confidence_prefer_active_nport_source_over_ne
             (
                 "qqq",
                 date(2026, 11, 7),
-                DataSource.NASDAQ_INDEX.value,
+                "nasdaq-index",
                 legacy_fetch,
                 "OLDLEG",
                 "Legacy Co",

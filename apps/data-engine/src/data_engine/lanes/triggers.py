@@ -121,9 +121,6 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                     if isinstance(custom_def, dict)
                     else (custom_def if isinstance(custom_def, str) else None)
                 )
-                overrides = cfg.get("overrides_json")
-                if isinstance(overrides, dict):
-                    overrides = json.dumps(overrides)
                 try:
                     op_cfg = NightlyBacktestConfig(
                         executed_at=exec_iso,
@@ -131,7 +128,6 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                         custom_definition_json=custom_def_json,
                         release_manifest_id=cfg.get("release_manifest_id"),
                         exploratory=bool(cfg.get("exploratory", False)),
-                        overrides_json=overrides,
                         start_cutoff=cfg.get("start_cutoff"),
                         end_cutoff=cfg.get("end_cutoff"),
                     )

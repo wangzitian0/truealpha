@@ -275,45 +275,20 @@ def _text(value: Decimal | None) -> str:
     return "none" if value is None else f"{value:.4f}"
 
 
-def _merge_override_dict(base: dict[str, Any], overrides: Mapping[str, Any]) -> None:
-    for raw_key, value in overrides.items():
-        *parents, leaf = raw_key.split(".")
-        cursor = base
-        for part in parents:
-            if not isinstance(cursor.get(part), dict):
-                cursor[part] = {}
-            cursor = cursor[part]
-        if isinstance(value, Mapping) and isinstance(cursor.get(leaf), dict):
-            _merge_override_dict(cursor[leaf], value)
-        else:
-            cursor[leaf] = value
-
-
-def apply_definition_overrides(
-    definition: LargeModelValueV0Definition, overrides: Mapping[str, Any]
-) -> LargeModelValueV0Definition:
-    if not overrides:
-        return definition
-    payload: dict[str, Any] = definition.model_dump(mode="json", exclude={"strategy_definition_id", "content_sha256"})
-    _merge_override_dict(payload, overrides)
-    payload.pop("strategy_definition_id", None)
-    payload.pop("content_sha256", None)
-    return LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
-
-
 def run_core_strategy_backtest(
     connection: psycopg.Connection[Any],
     *,
     tick: datetime,
     definition: LargeModelValueV0Definition | None = None,
-    overrides: Mapping[str, Any] | None = None,
+    release_manifest_id: str | None = None,
+    exploratory: bool = False,
     start_cutoff: datetime | None = None,
     end_cutoff: datetime | None = None,
 ) -> BacktestOutcome:
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
     code_identity = deployed_code_identity(settings.environment, settings.git_commit_sha)
-    definition = apply_definition_overrides(definition or load_strategy_definition(), overrides or {})
+    definition = definition or load_strategy_definition()
     rules = execution_rules(definition)
     start_utc = start_cutoff.astimezone(UTC) if start_cutoff else None
     end_utc = end_cutoff.astimezone(UTC) if end_cutoff else None
@@ -441,6 +416,8 @@ def run_core_strategy_backtest(
         "engine_id": ENGINE_ID,
         "price_basis": PRICE_BASIS,
         "claim_ceiling": CLAIM_CEILING,
+        "release_manifest_id": release_manifest_id,
+        "exploratory": exploratory,
         "execution": {
             "rule_id": definition.execution.rule_id,
             "lag_sessions": definition.execution.lag_sessions,
@@ -651,7 +628,6 @@ __all__ = [
     "BacktestPending",
     "BacktestRecord",
     "CutoffDecision",
-    "apply_definition_overrides",
     "benchmark_never_filled",
     "decide",
     "deployed_code_identity",

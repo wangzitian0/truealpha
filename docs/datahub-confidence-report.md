@@ -70,8 +70,8 @@ agreement grading.
 | `revenue`, `gross_profit`, `net_income`, `total_assets` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | `FINANCIAL_FACT_RECONCILIATION_POLICY` (`common/runtime/src/truealpha_runtime/reconciliation_policies.py`), aligned on the primary's fiscal period end in the primary's currency (#866) |
 | `pre_provision_profit`, `shares_outstanding` | financial-fact | `origin:sec-company-facts:v1` | none — a single origin gives `single_origin`, two lineages give `no_agreement_policy` |
 | `headcount` | financial-fact | `origin:headcount:<producer>` per producer in `staging.issuer_headcount_facts` | none — one lineage gives `same_lineage` |
-| `index_membership` | index-membership plane (QQQ) | `origin:nport:v1` (`mart.fund_holdings_resolved`); `origin:nasdaq-index:v1` retired in #1889 | `index-membership-fusion:v1`, presence compared against SEC N-PORT holdings |
-| `etf_weight` | index-membership plane (QQQ) | `origin:nport:v1` | `index-membership-fusion:v1`, weights from SEC N-PORT holdings |
+| `index_membership` | index-membership plane (QQQ) | `origin:nport:v1` (`mart.fund_holdings_resolved`); `origin:nasdaq-index:v1` retired in #1889 | `index-membership-fusion:v2`, presence compared against SEC N-PORT holdings |
+| `etf_weight` | index-membership plane (QQQ) | `origin:nport:v1` | `index-membership-fusion:v2`, weights from SEC N-PORT holdings |
 
 **Every field of the bar is its own family (#865).** The close is read under the origin's
 registered value key (the v1 second origin wrote `price`); open, high, low and volume under

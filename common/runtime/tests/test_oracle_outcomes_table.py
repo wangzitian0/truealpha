@@ -32,7 +32,7 @@ DISAGREE = {
     "served_value": "5693585848",
     "oracle_value": "1393600000",
     "oracle_kind": "operator",
-    "source": "nasdaq-index",
+    "source": "sec-nport",
     "observation_id": "etf-constituent-fact:1",
     "knowable_at": KNOWABLE_AT,
     "ratio": "4.085",

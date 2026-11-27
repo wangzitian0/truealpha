@@ -1,5 +1,5 @@
 # Built from the REPO ROOT (build context = .) so the uv workspace can resolve
-# the truealpha-factors path dependency:
+# workspace path dependencies:
 #   docker build -f apps/llm-service/Dockerfile .
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS build
 WORKDIR /app
@@ -9,16 +9,16 @@ COPY common/contracts/pyproject.toml ./common/contracts/pyproject.toml
 COPY common/factors/pyproject.toml ./common/factors/pyproject.toml
 COPY common/runtime/pyproject.toml ./common/runtime/pyproject.toml
 COPY apps/llm-service/pyproject.toml ./apps/llm-service/pyproject.toml
-# data-engine is a workspace member referenced by uv.lock; a stub pyproject
-# satisfies the resolver without pulling its dependencies into this image.
+# data-engine and factors are workspace members referenced by uv.lock; stub pyprojects
+# satisfy the resolver without pulling their dependencies into this image.
 COPY apps/data-engine/pyproject.toml ./apps/data-engine/pyproject.toml
-RUN mkdir -p apps/data-engine/src/data_engine && touch apps/data-engine/src/data_engine/__init__.py
+RUN mkdir -p apps/data-engine/src/data_engine common/factors/src/factors \
+    && touch apps/data-engine/src/data_engine/__init__.py common/factors/src/factors/__init__.py
 # Install third-party dependencies into .venv. This layer stays cached across code edits.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-workspace --package truealpha-llm-service
 
 COPY common/contracts ./common/contracts
-COPY common/factors ./common/factors
 COPY common/runtime ./common/runtime
 COPY apps/llm-service ./apps/llm-service
 # --no-editable: install workspace packages as built wheels so the venv is

@@ -302,32 +302,6 @@
           }
         ]
       },
-      "nasdaq_index": {
-        "holder": "host_ip",
-        "seats": ["nasdaq-index"],
-        "outside_consumers": false,
-        "limits": [
-          {
-            "id": "vendor_figure",
-            "unit": "request",
-            "amount": null,
-            "counts_per": "not_stated",
-            "evidence": {"kind": "none_published", "reason": "No published limit."}
-          },
-          {
-            "id": "pace",
-            "unit": "request",
-            "amount": 1,
-            "window_seconds": 1,
-            "counts_per": "not_stated",
-            "evidence": {
-              "kind": "self_imposed",
-              "reason": "Self-imposed weekly refresh pace (#1520).",
-              "checked_at": "2026-10-27"
-            }
-          }
-        ]
-      },
       "us_treasury": {
         "holder": "host_ip",
         "seats": ["us-treasury"],

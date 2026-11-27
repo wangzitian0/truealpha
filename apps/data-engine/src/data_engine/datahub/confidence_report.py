@@ -92,10 +92,8 @@ CROSS_CHECKED_FAMILIES: tuple[str, ...] = (*PRICE_BAR_FIELDS, *FINANCIAL_FACT_FU
 SEC_COMPANY_FACTS_ORIGIN = "origin:sec-company-facts:v1"
 SEC_COMPANY_FACTS_SOURCE = "sec-company-facts:v1"
 HEADCOUNT_LINEAGE: Mapping[str, str] = {"10k-extraction": "sec-10k", "manual-review": "sec-10k"}
-NASDAQ_INDEX_ORIGIN = "origin:nasdaq-index:v1"
 NPORT_ORIGIN = "origin:nport:v1"
 _ORIGIN_LINEAGE: Mapping[str, str] = {
-    NASDAQ_INDEX_ORIGIN: "nasdaq-index",
     NPORT_ORIGIN: "sec-nport",
     "origin:moomoo-kline:v1": "moomoo",
     "origin:moomoo-financials:v1": "moomoo",
@@ -887,9 +885,8 @@ def load_index_membership(
         elif wt_list[existing_wt].value is None and w_val is not None:
             wt_list[existing_wt] = OriginValue(origin_id, src, lin, w_val, knowable_at)
 
-    constituent_source = active_constituent_source(source)
-    constituent_origin = NPORT_ORIGIN if constituent_source == "nport" else NASDAQ_INDEX_ORIGIN
-    constituent_rank = 1 if constituent_source == "nport" else 0
+    constituent_origin = NPORT_ORIGIN
+    constituent_rank = 0
     mics = resolve_listing_mics(
         connection, source, [str(t) for t, _, _ in constituents], valid_at=cutoff.date(), known_at=cutoff
     )
@@ -911,7 +908,7 @@ def load_index_membership(
         if listing_id is None:
             unresolved.append(str(holding_name))
         else:
-            assert_route(str(listing_id), NPORT_ORIGIN, 1, weight, transaction_time)
+            assert_route(str(listing_id), NPORT_ORIGIN, 0, weight, transaction_time)
     notes = {
         "constituents_as_of": None if not constituents else constituents[0][2].astimezone(UTC).isoformat(),
         "constituent_count": len(constituents),

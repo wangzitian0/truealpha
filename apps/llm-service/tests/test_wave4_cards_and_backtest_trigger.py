@@ -253,6 +253,34 @@ def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trig
     assert custom_body["exploratory"] is True
     assert any("staging.pipeline_trigger_requests" in sql for sql, _ in recorded)
 
+    import asyncio
+    import json
+
+    from llm_service.mcp_auth import bind_mcp_principal_kind
+    from llm_service.mcp_server import build_mcp_server
+    from truealpha_runtime.access import PrincipalKind
+
+    mcp = build_mcp_server()
+    with bind_mcp_principal_kind(PrincipalKind.ADMINISTRATOR):
+        raw_res = asyncio.run(
+            mcp.call_tool(
+                "strategy_backtest_trigger",
+                {
+                    "request": {
+                        "custom_definition": custom_def_dict,
+                        "release_manifest_id": "release-manifest:mcp-1",
+                        "idempotency_key": "bt-mcp-1",
+                    }
+                },
+            )
+        )
+    content = raw_res[0] if isinstance(raw_res, tuple) else raw_res
+    mcp_body = json.loads(content[0].text)
+    assert mcp_body["dedupe_key"] == "bt-mcp-1"
+    assert mcp_body["release_manifest_id"] == "release-manifest:mcp-1"
+    assert mcp_body["custom_definition_sha256"] == custom_body["custom_definition_sha256"]
+    assert mcp_body["exploratory"] is True
+
 
 def test_verify_card_html_accepts_localized_labels_and_rejects_altered_numbers() -> None:
     cutoff = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)

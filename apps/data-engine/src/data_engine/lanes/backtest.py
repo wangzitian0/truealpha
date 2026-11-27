@@ -1,7 +1,5 @@
 """Nightly backtest lane for ``large_model_value_v0`` (#758, M3)."""
 
-import json
-
 import dagster as dg
 from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
@@ -30,7 +28,6 @@ class NightlyBacktestConfig(dg.Config):
     custom_definition_json: str | None = None
     release_manifest_id: str | None = None
     exploratory: bool = False
-    overrides_json: str | None = None
     start_cutoff: str | None = None
     end_cutoff: str | None = None
 
@@ -41,8 +38,10 @@ def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, obj
         kwargs["definition"] = LargeModelValueV0Definition.model_validate_json(config.custom_definition_json)
     elif config.definition_resource:
         kwargs["definition"] = load_packaged_strategy_definition(config.definition_resource)
-    if config.overrides_json:
-        kwargs["overrides"] = json.loads(config.overrides_json)
+    if config.release_manifest_id:
+        kwargs["release_manifest_id"] = config.release_manifest_id
+    if config.exploratory:
+        kwargs["exploratory"] = True
     if config.start_cutoff:
         kwargs["start_cutoff"] = tick_from_config(config.start_cutoff)
     if config.end_cutoff:
@@ -80,6 +79,8 @@ def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBackt
                 "strategy_key": result.strategy_key,
                 "cutoffs": result.cutoffs,
                 "trades": result.trades,
+                "release_manifest_id": config.release_manifest_id,
+                "exploratory": config.exploratory,
                 "cagr": None if result.strategy.cagr is None else float(result.strategy.cagr),
                 "benchmark_cagr": None if result.benchmark.cagr is None else float(result.benchmark.cagr),
                 "max_drawdown": float(result.strategy.max_drawdown),
