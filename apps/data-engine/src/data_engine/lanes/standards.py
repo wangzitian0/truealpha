@@ -1083,6 +1083,7 @@ def build_standards_plane_schedules(environment: str = settings.environment) -> 
 
 
 def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    standards_scheds: tuple[dg.ScheduleDefinition, ...]
     if environment == settings.environment:
         backfill_sched = standard_backfill_schedule
         history_sched = standard_history_schedule

@@ -194,6 +194,7 @@ def test_sensor_consumes_requests_on_a_schema_the_874_migration_has_not_reached(
     instead of failing every poll. The pre-#874 shape is rebuilt inside this test's
     transaction and rolled back afterwards."""
     connection.execute("drop trigger validate_trigger_update on ops.pipeline_trigger_requests")
+    connection.execute("drop view if exists staging.pipeline_trigger_requests")
     connection.execute("alter table ops.pipeline_trigger_requests drop column force_fetch")
     dedupe_key = "test-sensor-pre-874-schema"
     request_id = _insert_request(connection, dedupe_key)
