@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 RUN_WORKER_LOST = "run worker lost"
 CONTRACT_BOUND_TAG = "truealpha/contract_max_runtime"
 MAX_RUNTIME_ALIAS_TAG = "dagster/max_runtime_seconds"
+#: Jobs that wait on upstream ticks hold a slot in `_await_settled`; dynamic tight bounds kill them mid-wait.
+WAITS_FOR_RUNS_TAG = "truealpha/waits_for_runs"
 #: The universe of a run. One job serves universes of 20 and of 500 issuers, so the measured
 #: run times of one universe do not bound a run of another.
 UNIVERSE_TAG = "truealpha/universe"
@@ -90,7 +92,7 @@ def launch_tags(
 def bound_tags_to_write(
     job_name: str, run_tags: Mapping[str, str], instance: dg.DagsterInstance | None = None
 ) -> dict[str, str]:
-    if MAX_RUNTIME_ALIAS_TAG in run_tags:
+    if MAX_RUNTIME_ALIAS_TAG in run_tags or run_tags.get(WAITS_FOR_RUNS_TAG) == "true":
         return {}
     present = run_tags.get(MAX_RUNTIME_SECONDS_TAG)
     if present is not None and present != run_tags.get(CONTRACT_BOUND_TAG):

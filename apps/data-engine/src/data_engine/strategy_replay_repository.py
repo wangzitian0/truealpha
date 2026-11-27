@@ -10,7 +10,6 @@ from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
-from data_engine.core_strategy_replay import CORPUS_SHA256, Decision
 from data_engine.datahub._helpers import insert_or_verify_sha
 from data_engine.datahub.capture_core.status_dimensions import (
     contract_not_applicable_issuer_ids,
@@ -18,6 +17,7 @@ from data_engine.datahub.capture_core.status_dimensions import (
     statuses_without_raw_pointer,
 )
 from data_engine.datahub.risk_free import RiskFreeRate
+from data_engine.datahub.strategy_decisions import CORPUS_SHA256, Decision
 
 CLAIM_CEILING = "preview"
 
