@@ -18,10 +18,8 @@ DataAvailability = Literal["verified", "unverified"]
 __all__ = [
     "DataAvailability",
     "Fact",
-    "FactorError",
     "FactorResult",
     "GrowthConvention",
-    "InsufficientDataError",
     "UnitFamily",
     "market_multiple_factor",
     "refused_factor_result",
@@ -83,18 +81,6 @@ class FactorResult(BaseModel):
     as_of: datetime
     data_availability: DataAvailability = "unverified"
     flags: list[str] = Field(default_factory=list)
-
-
-class FactorError(Exception):
-    pass
-
-
-class InsufficientDataError(FactorError):
-    def __init__(self, factor: str, entity_id: str, missing: list[str]):
-        self.factor = factor
-        self.entity_id = entity_id
-        self.missing = missing
-        super().__init__(f"{factor}({entity_id}): missing inputs {missing}")
 
 
 def sole_fact(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:

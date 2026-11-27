@@ -26,7 +26,6 @@ from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Defin
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
-from data_engine.core_strategy_replay import _to_decision
 from data_engine.datahub._helpers import (
     CAPTURE_OBSERVATION_JOIN,
     execute_many,
@@ -49,7 +48,12 @@ from data_engine.datahub.share_basis import (
     on_close_basis,
 )
 from data_engine.datahub.share_count_entry import share_count_entry
-from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
+from data_engine.datahub.strategy_decisions import _to_decision
+from data_engine.strategy_backtest_gateway import (
+    StrategyBacktestGateway,
+    issuer_inputs_from_rows,
+    snapshot_id_from_rows,
+)
 from data_engine.strategy_replay_repository import bind_strategy_run_to_capture, write_replay
 
 log = logging.getLogger(__name__)
@@ -305,13 +309,14 @@ def run_strategy_replay_for_cutoff(
 ) -> tuple[str, int, str]:
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
+    snapshot_rows = gateway.rows_at(cutoff)
     issuer_classes = _issuer_classes_for_run(connection, capture_run_id)
     periods_by_issuer = _issuer_periods_for_run(connection, capture_run_id)
     issuer_inputs = [
         _with_periods(
             replace(item, issuer_class=issuer_classes.get(item.issuer_id)), periods_by_issuer.get(item.issuer_id, {})
         )
-        for item in gateway.issuer_inputs(cutoff)
+        for item in issuer_inputs_from_rows(snapshot_rows)
     ]
     seeded = {item.issuer_id for item in issuer_inputs}
     issuer_inputs += [
@@ -330,7 +335,7 @@ def run_strategy_replay_for_cutoff(
     decisions = sorted(
         (_to_decision(item, cutoff_key) for item in evaluated), key=lambda item: (item.cutoff_at, item.issuer_id)
     )
-    snapshot_id = gateway.snapshot_id(cutoff)
+    snapshot_id = snapshot_id_from_rows(snapshot_rows)
     run_id, decision_ids = write_replay(
         connection,
         decisions,

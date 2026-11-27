@@ -428,10 +428,15 @@ def project_issuer_rows(
             if outcome.record is None:
                 raise RuntimeError(f"the SEC adapter returned a success without a record for {issuer.issuer_id}")
             payload = outcome.record.payload
+            skipped: list[str] = []
             projected = financial_input_rows(
-                payload, None, outcome.transaction_time, knowable_at_of=vintage_knowable_at(payload)
+                payload,
+                None,
+                outcome.transaction_time,
+                knowable_at_of=vintage_knowable_at(payload),
+                skipped_out=skipped,
             )
-            undated += len(financial_input_rows(payload, None, outcome.transaction_time)) - len(projected)
+            undated += len(skipped)
         else:
             no_outcome += 1
         bar = last_close(issuer.ticker, cutoff_at)

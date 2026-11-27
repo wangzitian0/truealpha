@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Any
 
 import polars as pl
 from factors.panel import (
     ALL_ISSUER_CLASSES,
     FACTOR_VARIANTS,
+    PANEL_DECIMAL_CONTEXT,
     PANEL_EXPRESSIONS,
     PANEL_METRICS,
     AliasKind,
@@ -491,6 +492,33 @@ def materialize_metric_node_values(
     return inserted_count
 
 
+_DECIMAL_MARKET_RATIOS: dict[str, str] = {
+    "price_to_sales": "revenue",
+    "price_to_gross_profit": "gross_profit",
+}
+
+
+def _evaluate_decimal_market_ratio(
+    denom_key: str,
+    leaf_values: Mapping[str, Decimal | None],
+    leaf_confs: Mapping[str, Decimal],
+) -> tuple[Decimal | None, Decimal]:
+    """Compute `(price * shares_outstanding) / denom` in exact Decimal matching `PANEL_DECIMAL_CONTEXT`."""
+    price = leaf_values.get("price")
+    shares = leaf_values.get("shares_outstanding")
+    denom = leaf_values.get(denom_key)
+    if price is None or shares is None or denom is None or price <= 0 or shares <= 0 or denom <= 0:
+        return None, Decimal("0")
+    with localcontext(PANEL_DECIMAL_CONTEXT):
+        ratio = (price * shares) / denom
+    conf = min(
+        leaf_confs.get("price", Decimal("0")),
+        leaf_confs.get("shares_outstanding", Decimal("0")),
+        leaf_confs.get(denom_key, Decimal("0")),
+    )
+    return ratio, conf
+
+
 def _materialize_extra_expressions(
     connection: Connection[Any],
     *,
@@ -506,15 +534,26 @@ def _materialize_extra_expressions(
     consumed_leaves: set[str] = set()
     for expr in extra_expressions.values():
         consumed_leaves.update(leaf_consumed_columns(expr, metrics=metrics, expressions=all_expressions))
+    needs_polars = any(name not in _DECIMAL_MARKET_RATIOS for name in extra_expressions)
 
     panel_rows: list[dict[str, Any]] = []
-    meta_by_row: dict[tuple[str, str], tuple[CoreSnapshotInput, dict[str, str], MetricFreshness, str]] = {}
+    meta_by_row: dict[
+        tuple[str, str],
+        tuple[
+            CoreSnapshotInput,
+            dict[str, str],
+            MetricFreshness,
+            str,
+            dict[str, Decimal | None],
+            dict[str, Decimal],
+        ],
+    ] = {}
     for factor_input in factor_inputs:
         if factor_input.primary_listing_undeclared:
             continue
         issuer_class = IssuerClass(factor_input.operating_branch.value)
         freshness = _snapshot_freshness(factor_input)
-        base_conf = float(_snapshot_leaf_confidence(factor_input))
+        base_conf = _snapshot_leaf_confidence(factor_input)
         financial_payload = financial_by_listing.get(factor_input.listing_id, {})
         periods = periods_by_listing.get(factor_input.listing_id, (None, None, None))
         period_date = periods[0] or periods[1]
@@ -526,6 +565,8 @@ def _materialize_extra_expressions(
             "issuer_class": issuer_class.value,
         }
         reasons: dict[str, str] = {}
+        leaf_values: dict[str, Decimal | None] = {}
+        leaf_confs: dict[str, Decimal] = {}
         for col in sorted(consumed_leaves):
             spec = _spec_for_column(col, metrics, all_expressions)
             val, reason, conf = _resolve_input_value(
@@ -534,39 +575,66 @@ def _materialize_extra_expressions(
                 gppe_definition=gppe_definition,
                 financial_payload=financial_payload,
             )
-            row[col] = float(val) if val is not None else None
-            row[f"conf__{col}"] = float(conf) if conf is not None else base_conf
+            leaf_values[col] = val
+            eff_conf = conf if conf is not None else base_conf
+            leaf_confs[col] = eff_conf
+            if needs_polars:
+                row[col] = float(val) if val is not None else None
+                row[f"conf__{col}"] = float(eff_conf)
             if reason is not None:
                 reasons[col] = reason
-        panel_rows.append(row)
-        meta_by_row[(factor_input.issuer_id, period_str)] = (factor_input, reasons, freshness, period_tag)
+        if needs_polars:
+            panel_rows.append(row)
+        meta_by_row[(factor_input.issuer_id, period_str)] = (
+            factor_input,
+            reasons,
+            freshness,
+            period_tag,
+            leaf_values,
+            leaf_confs,
+        )
 
-    if not panel_rows:
+    if not meta_by_row:
         return 0
-    evaluated = evaluate_wide_panel(
-        build_wide_panel(panel_rows),
-        targets=tuple(extra_expressions),
-        expressions=all_expressions,
-        include_confidence=True,
-    )
+    polars_by_row: dict[tuple[str, str], dict[str, Any]] = {}
+    if needs_polars:
+        evaluated = evaluate_wide_panel(
+            build_wide_panel(panel_rows),
+            targets=tuple(extra_expressions),
+            expressions=all_expressions,
+            include_confidence=True,
+        )
+        polars_by_row = {
+            (str(eval_row["issuer_id"]), str(eval_row["period"])): eval_row
+            for eval_row in evaluated.iter_rows(named=True)
+        }
     count = 0
-    for eval_row in evaluated.iter_rows(named=True):
-        issuer_id, period_str = str(eval_row["issuer_id"]), str(eval_row["period"])
-        factor_input, input_reasons, freshness, period_tag = meta_by_row[(issuer_id, period_str)]
+    for (issuer_id, period_str), meta in meta_by_row.items():
+        factor_input, input_reasons, freshness, period_tag, leaf_values, leaf_confs = meta
+        eval_row = polars_by_row.get((issuer_id, period_str), {})
         source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.DEGRADED)
         for name, expr in extra_expressions.items():
             spec = _spec_for_column(name, metrics, all_expressions)
-            raw_val, conf_val = eval_row.get(name), eval_row.get(f"conf__{name}")
             leaves = leaf_consumed_columns(expr, metrics=metrics, expressions=all_expressions)
             node_reasons = [input_reasons[k] for k in leaves if k in input_reasons]
-            if raw_val is None or node_reasons:
-                persisted_val, avail_str, node_conf = None, "unavailable", Decimal("0")
-                if not node_reasons:
-                    node_reasons.append("undefined_operand")
+            if denom_key := _DECIMAL_MARKET_RATIOS.get(name):
+                dec_val, dec_conf = _evaluate_decimal_market_ratio(denom_key, leaf_values, leaf_confs)
+                if dec_val is None or node_reasons:
+                    persisted_val, avail_str, node_conf = None, "unavailable", Decimal("0")
+                    if not node_reasons:
+                        node_reasons.append("undefined_operand")
+                else:
+                    persisted_val, avail_str, node_conf = dec_val, "available", dec_conf
             else:
-                persisted_val = Decimal(str(raw_val))
-                avail_str = "available"
-                node_conf = Decimal(str(conf_val if conf_val is not None else 0.0))
+                raw_val, conf_val = eval_row.get(name), eval_row.get(f"conf__{name}")
+                if raw_val is None or node_reasons:
+                    persisted_val, avail_str, node_conf = None, "unavailable", Decimal("0")
+                    if not node_reasons:
+                        node_reasons.append("undefined_operand")
+                else:
+                    persisted_val = Decimal(str(raw_val))
+                    avail_str = "available"
+                    node_conf = Decimal(str(conf_val if conf_val is not None else 0.0))
             count += _insert_metric_node_value(
                 connection,
                 run_id=factor_input.run_id,

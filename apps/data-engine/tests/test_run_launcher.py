@@ -42,6 +42,7 @@ from data_engine.run_launcher import (
     CONTRACT_BOUND_TAG,
     MAX_RUNTIME_ALIAS_TAG,
     RUN_WORKER_LOST,
+    WAITS_FOR_RUNS_TAG,
     MonitoredRunLauncher,
     bound_tags_to_write,
     max_runtime_tags,
@@ -325,6 +326,11 @@ def _contract_tags(instance: DagsterInstance) -> dict[str, str]:
             "nothing",
             id="operator bound on a re-execution",
         ),
+        pytest.param(
+            {WAITS_FOR_RUNS_TAG: "true"},
+            "nothing",
+            id="waits-for-runs job settles under instance max_runtime",
+        ),
     ],
 )
 def test_the_launch_keeps_an_operator_bound_and_renews_a_copied_contract_bound(
@@ -335,3 +341,41 @@ def test_the_launch_keeps_an_operator_bound_and_renews_a_copied_contract_bound(
     expected = _contract_tags(instance) if written == "contract" else {}
 
     assert bound_tags_to_write(BOUNDED_JOB, run_tags, instance=instance) == expected
+
+
+def test_decimal_market_ratio_avoids_binary_float_rounding_and_respects_min_confidence() -> None:
+    from decimal import Decimal
+
+    from data_engine.datahub.capture_core.metric_node_values import _evaluate_decimal_market_ratio
+
+    ratio, conf = _evaluate_decimal_market_ratio(
+        "revenue",
+        {"price": Decimal("100.10"), "shares_outstanding": Decimal("3"), "revenue": Decimal("1000")},
+        {"price": Decimal("0.95"), "shares_outstanding": Decimal("0.80"), "revenue": Decimal("0.90")},
+    )
+    # Pure Decimal gives exact 0.3003 rather than binary float 0.30030000000000004.
+    assert ratio == Decimal("0.3003")
+    assert conf == Decimal("0.80")
+
+
+def test_financial_input_rows_records_skipped_undated_keys_in_one_pass() -> None:
+    from decimal import Decimal
+
+    from data_engine.datahub.input_cells import financial_input_rows, vintage_knowable_at
+
+    payload = {
+        "gross_profit": "100",
+        "revenue": "200",
+        "currency": "USD",
+        "vintage": {"gross_profit": {"knowable_at": "2026-02-01T00:00:00Z"}},
+    }
+    skipped: list[str] = []
+    cells = financial_input_rows(
+        payload,
+        Decimal("0.9"),
+        datetime(2026, 3, 1, tzinfo=UTC),
+        knowable_at_of=vintage_knowable_at(payload),
+        skipped_out=skipped,
+    )
+    assert [c.input_key for c in cells] == ["gross_profit"]
+    assert skipped == ["revenue"]

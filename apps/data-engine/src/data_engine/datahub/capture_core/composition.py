@@ -38,8 +38,7 @@ from data_engine.contracts.evidence_graph import (
 )
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import quality_report
-from data_engine.datahub.capture_core.capture_orchestration import run_capture
-from data_engine.datahub.capture_core.executor import SourceFetchPort
+from data_engine.datahub.capture_core.executor import SourceFetchPort, run_capture
 from data_engine.datahub.capture_core.issuer_registry import UNAVAILABLE_PAYLOAD_KEY
 from data_engine.datahub.capture_core.market_price_adapter import last_settled_session_date
 from data_engine.datahub.capture_core.materialization import PostgresCoreRepository

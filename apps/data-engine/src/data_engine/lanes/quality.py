@@ -35,9 +35,8 @@ from data_engine.quality.nightly_verdicts import (
     tick_of,
     verdict,
 )
+from data_engine.run_launcher import WAITS_FOR_RUNS_TAG
 from data_engine.sources import gateway
-
-WAITS_FOR_RUNS_TAG = "truealpha/waits_for_runs"
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
 OUTPUT_INVARIANTS_CRON = "30 2 * * *"

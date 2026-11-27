@@ -115,6 +115,7 @@ def financial_input_rows(
     *,
     knowable_at_of: KnowableAtOf | None = None,
     confidence_by_key: Mapping[str, Decimal] | None = None,
+    skipped_out: list[str] | None = None,
 ) -> list[InputCell]:
     if observed_at is None and knowable_at_of is None:
         raise ValueError("financial_input_rows requires observed_at or knowable_at_of (no wall-clock default)")
@@ -132,14 +133,19 @@ def financial_input_rows(
     cells: list[InputCell] = []
     for key in _STRATEGY_FINANCIAL_KEYS:
         value = payload.get(key)
-        if value is not None and (stamp := stamp_of(key, None)) is not None:
-            cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), _conf_for(key), stamp, None))
+        if value is not None:
+            if (stamp := stamp_of(key, None)) is not None:
+                cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), _conf_for(key), stamp, None))
+            elif skipped_out is not None:
+                skipped_out.append(key)
     for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
         key_conf = _conf_for(key)
         for period_end, value in sorted((payload.get(payload_key) or {}).items()):
             if (stamp := stamp_of(key, period_end)) is not None:
                 tag = encode_annual(date.fromisoformat(period_end))
                 cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), key_conf, stamp, tag))
+            elif skipped_out is not None:
+                skipped_out.append(f"{key}:{period_end}")
     return cells
 
 
