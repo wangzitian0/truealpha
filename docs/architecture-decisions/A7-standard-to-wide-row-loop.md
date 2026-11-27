@@ -40,8 +40,7 @@ adapter are declared once in `data_engine.contracts.standards.MetricStandard`
 - **Explicit FactPlane**: Each standard owns its table, issuer column, and withdrawn
   extractors tuple. It names the reconciliation policy that owns its source order.
 - **Two kinds, one row**: `HARD` standards require deterministic rules; `EVALUATIVE`
-  standards carry `factor_validation_status` and cannot enter strategy eligibility while
-  `unvalidated` (Milestone M2, #773).
+  standards follow continuous confidence and plausibility checks (`factor_validation_status` was retired in Wave C2).
 
 ## Decision 2 — Missing-cell planning derives from declared demand
 

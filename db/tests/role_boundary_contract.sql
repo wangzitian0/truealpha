@@ -106,13 +106,43 @@ begin
         'mart.current_pointer_head',
         'mart.nightly_verdicts',
         'mart.output_invariant_results',
+        'mart.data_engine_identity',
+        'mart.capture_status',
+        'mart.capture_meta_info',
         'ops.nightly_verdicts',
         'ops.output_invariant_results',
         'ops.pipeline_trigger_requests',
-        'ops.head_rollback_requests'
+        'ops.head_rollback_requests',
+        'ops.data_engine_identity',
+        'ops.capture_status',
+        'ops.capture_meta_info'
     ] loop
         if has_table_privilege('mart_readonly', restricted_tbl, 'select') then
             raise exception 'mart_readonly must not select from %', restricted_tbl;
+        end if;
+    end loop;
+
+    if has_schema_privilege('app_runtime', 'staging', 'USAGE') then
+        raise exception 'app_runtime must not have USAGE on staging';
+    end if;
+    if not has_table_privilege('app_runtime', 'ops.pipeline_trigger_requests', 'INSERT') then
+        raise exception 'app_runtime must have INSERT on ops.pipeline_trigger_requests';
+    end if;
+    if not has_table_privilege('app_runtime', 'ops.head_rollback_requests', 'INSERT') then
+        raise exception 'app_runtime must have INSERT on ops.head_rollback_requests';
+    end if;
+
+    foreach restricted_tbl in array array[
+        'staging.etf_constituent_facts',
+        'staging.accepted_rulesets',
+        'staging.accepted_ruleset_head',
+        'staging.contract_objects',
+        'staging.fund_holding_facts',
+        'raw.capture_obligations',
+        'raw.capture_obligation_results'
+    ] loop
+        if has_table_privilege('app_ops_reader', restricted_tbl, 'select') then
+            raise exception 'app_ops_reader must not select pruned dead grant %', restricted_tbl;
         end if;
     end loop;
 
@@ -121,6 +151,9 @@ begin
     select count(*) into row_count from ops.output_invariant_results;
     select count(*) into row_count from ops.pipeline_trigger_requests;
     select count(*) into row_count from ops.head_rollback_requests;
+    select count(*) into row_count from ops.data_engine_identity;
+    select count(*) into row_count from ops.capture_status;
+    select count(*) into row_count from ops.capture_meta_info;
     reset role;
 
     if not exists (

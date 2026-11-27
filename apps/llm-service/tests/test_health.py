@@ -10,7 +10,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from llm_service import main
-from llm_service.main import ROUTED_PREFIX, app
+from llm_service.main import app
 from pydantic import SecretStr
 from truealpha_runtime.testing import clone_test_database, db_writes_allowed, isolated_test_database
 
@@ -82,7 +82,7 @@ class _Rows:
 
 
 class _VerdictsOnly:
-    """A connection whose only readable relation is mart.nightly_verdicts: every other read
+    """A connection whose only readable relation is ops.nightly_verdicts: every other read
     fails the way a database that predates it does, and must not take this one down."""
 
     class _Cursor:
@@ -132,7 +132,7 @@ class _VerdictsOnly:
         import psycopg
 
         self.asked.append(sql)
-        if "mart.nightly_verdicts" in sql:
+        if "ops.nightly_verdicts" in sql:
             return _Rows(self.rows)
         raise psycopg.errors.UndefinedTable("relation does not exist")
 
@@ -170,7 +170,7 @@ def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> Non
         },
     ]
     # The read is the newest row per check, never every row of an append-only table.
-    (verdict_sql,) = [sql for sql in connection.asked if "mart.nightly_verdicts" in sql]
+    (verdict_sql,) = [sql for sql in connection.asked if "ops.nightly_verdicts" in sql]
     assert "distinct on (check_name)" in verdict_sql and "ran_at desc" in verdict_sql
     # A cap would silently drop checks past it, which the tool then reports as missing.
     assert "limit" not in verdict_sql.lower()
@@ -733,7 +733,7 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
     # which is what lets a forged Host choose the destination (review). A
     # relative Location keeps the client's scheme without naming one.
     assert "://" not in location, f"an absolute Location lets the Host header choose the destination: {location}"
-    assert location == f"{ROUTED_PREFIX}/mcp/", f"redirect is not the routed path: {location}"
+    assert location == "/api/mcp/", f"redirect is not the routed path: {location}"
     for method, answer in slashless.items():
         assert answer.status_code == 307, (
             f"{method} without the trailing slash answers {answer.status_code}; the "
@@ -743,8 +743,8 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
         # `.get`, not `[...]`: a method the handler does not accept answers 405
         # with no Location at all, and indexing turned that into a KeyError
         # traceback instead of a sentence naming the method.
-        assert answer.headers.get("location") == f"{ROUTED_PREFIX}/mcp/", (
-            f"{method} redirects to {answer.headers.get('location')!r}, not {ROUTED_PREFIX}/mcp/"
+        assert answer.headers.get("location") == "/api/mcp/", (
+            f"{method} redirects to {answer.headers.get('location')!r}, not '/api/mcp/'"
         )
     monkeypatch.setattr(main.settings, "routed_prefix", "/custom-gw")
     custom_redirect = client.get("/mcp", follow_redirects=False)

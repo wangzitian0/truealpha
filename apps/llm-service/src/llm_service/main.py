@@ -25,11 +25,10 @@ from llm_service.services._db import close_pools, with_ops_reader
 logger = logging.getLogger(__name__)
 
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
-ROUTED_PREFIX = "/api"
 TRUSTED_PROXIES = ("127.0.0.1", "::1")
 NIGHTLY_VERDICTS_SQL = (
     "select distinct on (check_name) check_name, ran_at, ok, summary "
-    "from mart.nightly_verdicts order by check_name, ran_at desc, recorded_at desc"
+    "from ops.nightly_verdicts order by check_name, ran_at desc, recorded_at desc"
 )
 GOVERNED_POINTERS_SQL = (
     "select universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability "
@@ -215,7 +214,7 @@ def _data_engine_facts() -> tuple[str, str, list[dict[str, Any]] | str, list[dic
         def _collect(cur: Any) -> tuple[str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
             sha, digest = _read_health_fact(
                 cur,
-                "select git_sha, image_digest from mart.data_engine_identity order by created_at desc limit 1",
+                "select git_sha, image_digest from ops.data_engine_identity order by created_at desc limit 1",
                 _identity,
                 ("unknown", "unknown"),
             )

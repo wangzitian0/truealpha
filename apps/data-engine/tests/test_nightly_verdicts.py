@@ -72,7 +72,7 @@ class _Sink:
         # The surface proof needs one scheduled head to prove anything (#28 V3); this database
         # serves one fresh TOPT head.
         self._reads_served_heads = "from mart.served_head" in sql
-        if "insert into mart.nightly_verdicts" in sql:
+        if "insert into ops.nightly_verdicts" in sql:
             self.rows.append(params)
         return self
 
@@ -907,10 +907,10 @@ def _connection() -> psycopg.Connection:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             raise
         pytest.skip("no local Postgres")
-    (table,) = connection.execute("select to_regclass('mart.nightly_verdicts')").fetchone() or (None,)
+    (table,) = connection.execute("select to_regclass('ops.nightly_verdicts')").fetchone() or (None,)
     if table is None:
         connection.close()
-        skip_or_fail("mart.nightly_verdicts missing (make db-migrate)")
+        skip_or_fail("ops.nightly_verdicts missing (make db-migrate)")
     return connection
 
 
@@ -923,20 +923,20 @@ def test_verdicts_append_and_are_never_rewritten() -> None:
         for ok, summary in ((False, "failed: x"), (True, "ok")):
             connection.execute(nightly_verdicts.INSERT_SQL, ("output_invariants", tick, ok, summary, "test-run"))
         rows = connection.execute(
-            "select ok, summary from mart.nightly_verdicts where dagster_run_id = 'test-run' order by verdict_id"
+            "select ok, summary from ops.nightly_verdicts where dagster_run_id = 'test-run' order by verdict_id"
         ).fetchall()
         assert rows == [(False, "failed: x"), (True, "ok")]
         with pytest.raises(psycopg.errors.RaiseException), connection.transaction():
-            connection.execute("update mart.nightly_verdicts set ok = true where dagster_run_id = 'test-run'")
+            connection.execute("update ops.nightly_verdicts set ok = true where dagster_run_id = 'test-run'")
         with pytest.raises(psycopg.errors.RaiseException), connection.transaction():
-            connection.execute("delete from mart.nightly_verdicts where dagster_run_id = 'test-run'")
+            connection.execute("delete from ops.nightly_verdicts where dagster_run_id = 'test-run'")
         for bad in (("Not A Name", "x"), ("output_invariants", ""), ("output_invariants", "x" * 301)):
             with pytest.raises(psycopg.errors.CheckViolation), connection.transaction():
                 connection.execute(nightly_verdicts.INSERT_SQL, (bad[0], tick, True, bad[1], "test-run"))
         # The health endpoint's read (llm_service.main.NIGHTLY_VERDICTS_SQL) orders the newest
         # row per check by (ran_at, recorded_at): the later of two same-tick rows wins.
         newest = connection.execute(
-            "select distinct on (check_name) ok from mart.nightly_verdicts "
+            "select distinct on (check_name) ok from ops.nightly_verdicts "
             "where dagster_run_id = 'test-run' order by check_name, ran_at desc, recorded_at desc"
         ).fetchone()
         assert newest == (True,)

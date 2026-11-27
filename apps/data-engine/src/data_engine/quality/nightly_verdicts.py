@@ -1,4 +1,4 @@
-"""Record nightly check verdicts in ``mart.nightly_verdicts`` (#876 W1)."""
+"""Record nightly check verdicts in ``ops.nightly_verdicts`` (#876 W1)."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ SUMMARY_LIMIT = 300
 _NAME = re.compile(r"[a-z0-9_]+(@[a-z0-9_.:-]+)?")
 
 INSERT_SQL = (
-    "insert into mart.nightly_verdicts (check_name, ran_at, ok, summary, dagster_run_id) values (%s, %s, %s, %s, %s)"
+    "insert into ops.nightly_verdicts (check_name, ran_at, ok, summary, dagster_run_id) values (%s, %s, %s, %s, %s)"
 )
-NEWEST_SQL = "select ok from mart.nightly_verdicts where check_name = %s order by ran_at desc, recorded_at desc limit 1"
+NEWEST_SQL = "select ok from ops.nightly_verdicts where check_name = %s order by ran_at desc, recorded_at desc limit 1"
 
 
 def newest_is_red(name: str) -> bool:

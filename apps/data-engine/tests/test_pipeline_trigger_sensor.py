@@ -31,12 +31,12 @@ def _insert_request(connection, dedupe_key: str, *, force_fetch: bool | None = N
         # The pre-#874 statement shape, verbatim: an app that never names the column
         # must keep working, and must launch an unforced tick.
         return connection.execute(
-            "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
+            "insert into ops.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
             "values ('topt_live_pipeline', %s, 'principal:owner', %s) returning request_id",
             (_EXECUTED_AT, dedupe_key),
         ).fetchone()[0]
     return connection.execute(
-        "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) "
+        "insert into ops.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) "
         "values ('topt_live_pipeline', %s, 'principal:owner', %s, %s) returning request_id",
         (_EXECUTED_AT, dedupe_key, force_fetch),
     ).fetchone()[0]
@@ -46,11 +46,11 @@ def test_app_runtime_can_insert_and_read_but_not_update(connection) -> None:
     connection.execute("set local role app_runtime")
     request_id = _insert_request(connection, "test-grant-shape")
     assert connection.execute(
-        "select consumed_at from staging.pipeline_trigger_requests where request_id = %s", (request_id,)
+        "select consumed_at from ops.pipeline_trigger_requests where request_id = %s", (request_id,)
     ).fetchone() == (None,)
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         connection.execute(
-            "update staging.pipeline_trigger_requests set launched_run_key = 'forged' where request_id = %s",
+            "update ops.pipeline_trigger_requests set launched_run_key = 'forged' where request_id = %s",
             (request_id,),
         )
 
@@ -76,7 +76,7 @@ def test_sensor_launches_once_with_requested_executed_at_and_consumes(connection
         assert tick_config["force_fetch"] is False
 
         consumed_at, run_key = connection.execute(
-            "select consumed_at, launched_run_key from staging.pipeline_trigger_requests where request_id = %s",
+            "select consumed_at, launched_run_key from ops.pipeline_trigger_requests where request_id = %s",
             (request_id,),
         ).fetchone()
         assert consumed_at is not None and run_key == f"manual:{dedupe_key}"
@@ -85,7 +85,7 @@ def test_sensor_launches_once_with_requested_executed_at_and_consumes(connection
 
         with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(
-                "update staging.pipeline_trigger_requests set launched_run_key = 'again' where request_id = %s",
+                "update ops.pipeline_trigger_requests set launched_run_key = 'again' where request_id = %s",
                 (request_id,),
             )
     finally:
@@ -96,7 +96,7 @@ def test_sensor_launches_once_with_requested_executed_at_and_consumes(connection
 def test_delete_is_rejected_even_for_the_owner_role(connection) -> None:
     request_id = _insert_request(connection, "test-no-delete")
     with pytest.raises(psycopg.errors.CheckViolation):
-        connection.execute("delete from staging.pipeline_trigger_requests where request_id = %s", (request_id,))
+        connection.execute("delete from ops.pipeline_trigger_requests where request_id = %s", (request_id,))
 
 
 class _reuse:
@@ -119,7 +119,7 @@ def _cleanup(connection) -> None:
     # by consuming them (if the sensor has not already) so reruns stay clean —
     # dedupe_key is unique, so a NEW key per test run is the real isolation.
     connection.execute(
-        "update staging.pipeline_trigger_requests set consumed_at = clock_timestamp(), "
+        "update ops.pipeline_trigger_requests set consumed_at = clock_timestamp(), "
         "launched_run_key = 'test-cleanup' where dedupe_key like 'test-sensor-%' and consumed_at is null"
     )
     connection.commit()
@@ -136,7 +136,7 @@ def test_sensor_dispatches_every_declared_tick_to_its_own_op(connection, monkeyp
 
     dedupe_key = f"test-tick-{tick.key}-{uuid.uuid4().hex[:12]}"
     request_id = connection.execute(
-        "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
+        "insert into ops.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
         "values (%s, %s, %s, %s) returning request_id",
         (tick.job_name, _EXECUTED_AT, "test", dedupe_key),
     ).fetchone()[0]
@@ -182,7 +182,7 @@ def test_force_fetch_is_immutable_once_requested(connection) -> None:
     request_id = _insert_request(connection, "test-force-immutable", force_fetch=True)
     with pytest.raises(psycopg.errors.CheckViolation):
         connection.execute(
-            "update staging.pipeline_trigger_requests set force_fetch = false where request_id = %s",
+            "update ops.pipeline_trigger_requests set force_fetch = false where request_id = %s",
             (request_id,),
         )
 
@@ -193,8 +193,9 @@ def test_sensor_consumes_requests_on_a_schema_the_874_migration_has_not_reached(
     consuming requests (as unforced ticks; no request can ask for more on that schema)
     instead of failing every poll. The pre-#874 shape is rebuilt inside this test's
     transaction and rolled back afterwards."""
-    connection.execute("drop trigger validate_trigger_update on staging.pipeline_trigger_requests")
-    connection.execute("alter table staging.pipeline_trigger_requests drop column force_fetch")
+    connection.execute("drop trigger validate_trigger_update on ops.pipeline_trigger_requests")
+    connection.execute("drop view if exists staging.pipeline_trigger_requests")
+    connection.execute("alter table ops.pipeline_trigger_requests drop column force_fetch")
     dedupe_key = "test-sensor-pre-874-schema"
     request_id = _insert_request(connection, dedupe_key)
     monkeypatch.setattr(psycopg, "connect", lambda *a, **k: _reuse_without_commit(connection))
@@ -207,7 +208,7 @@ def test_sensor_consumes_requests_on_a_schema_the_874_migration_has_not_reached(
         "force_fetch": False,
     }
     assert connection.execute(
-        "select launched_run_key from staging.pipeline_trigger_requests where request_id = %s", (request_id,)
+        "select launched_run_key from ops.pipeline_trigger_requests where request_id = %s", (request_id,)
     ).fetchone() == (f"manual:{dedupe_key}",)
 
 
@@ -276,13 +277,13 @@ def test_consume_head_rollback_requests_advances_with_original_cutoff_and_is_ide
 
         def execute(self, sql: str, params=()):
             low = sql.lower()
-            if "to_regclass('staging.head_rollback_requests')" in low:
-                return _FakeRes([("staging.head_rollback_requests",)])
-            if "from staging.head_rollback_requests" in low:
+            if "to_regclass('ops.head_rollback_requests')" in low:
+                return _FakeRes([("ops.head_rollback_requests",)])
+            if "from ops.head_rollback_requests" in low:
                 return _FakeRes(self.requests)
             if "from raw.capture_runs" in low:
                 return _FakeRes([(original_cutoff,)])
-            if "update staging.head_rollback_requests" in low:
+            if "update ops.head_rollback_requests" in low:
                 self.updates.append((str(params[0]), int(params[1])))
                 return _FakeRes([])
             return _FakeRes([])

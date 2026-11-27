@@ -730,7 +730,7 @@ def _rows(connection: Any, sql: str) -> list[tuple]:
 
 
 _INSERT_RESULT_SQL = """
-    insert into mart.output_invariant_results (
+    insert into ops.output_invariant_results (
         dagster_run_id, checked_at, invariant_id, kind, population, violation_count, deferred, sample_rows
     ) values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
 """

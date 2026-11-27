@@ -237,7 +237,7 @@ There are two ways to launch a forced run by hand:
 
 1. **The admin page.** On `/admin`, pick the target universe (`topt`, `qqq`, `sp500`, or
    `canary`), optionally tick "Force a fresh vendor fetch", and press "Trigger a run now".
-   This inserts a `staging.pipeline_trigger_requests` row consumed by `pipeline_trigger_sensor`
+   This inserts an `ops.pipeline_trigger_requests` row consumed by `pipeline_trigger_sensor`
    within about 30 seconds.
 2. **Dagster GraphQL.** Send `launchRun` to the webserver's `/graphql` endpoint:
 

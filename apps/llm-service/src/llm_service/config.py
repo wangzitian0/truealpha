@@ -16,11 +16,11 @@ class Settings(RuntimeSettings):
     """Runtime settings layered on the runtime contract.
 
     `llm-service` serves the OpenAPI 3.1 API, MCP streamable-HTTP surface, `/health`,
-    and S3-backed document storage over `mart` and `app`, and its container entrypoint
+    and S3-backed document storage over `mart`, `ops`, and `app`, and its container entrypoint
     runs `db/apply_migrations.sh`. It never calls an external LLM API.
 
     There is no fixture backend to select (#434 exit criterion 3, 2026-09-07): the MCP
-    tools and OpenAPI endpoints read the real `mart` and `app` schemas and nothing else.
+    tools and OpenAPI endpoints read the real `mart`, `ops`, and `app` schemas and nothing else.
     AGENTS.md: fixture data lives in tests only and is never reachable from a deployed route.
     """
 

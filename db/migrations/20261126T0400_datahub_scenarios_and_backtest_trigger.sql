@@ -6,7 +6,7 @@ do $$
 declare
     rel oid := to_regclass('mart.issuer_analyst_ratings');
 begin
-    if rel is not null then
+    if exists (select 1 from pg_class where oid = rel and relkind = 'r') then
         if not exists (select 1 from pg_attribute where attrelid = rel and attname = 'target_price' and not attisdropped) then
             alter table mart.issuer_analyst_ratings add column target_price numeric;
         end if;
@@ -26,7 +26,7 @@ do $$
 declare
     rel oid := to_regclass('mart.fund_virtual_company');
 begin
-    if rel is not null then
+    if exists (select 1 from pg_class where oid = rel and relkind = 'r') then
         if not exists (select 1 from pg_attribute where attrelid = rel and attname = 'virtual_revenue' and not attisdropped) then
             alter table mart.fund_virtual_company add column virtual_revenue numeric;
         end if;
@@ -47,7 +47,7 @@ declare
     rel oid := to_regclass('staging.pipeline_trigger_requests');
     cdef text;
 begin
-    if rel is not null then
+    if exists (select 1 from pg_class where oid = rel and relkind = 'r') then
         if not exists (select 1 from pg_attribute where attrelid = rel and attname = 'config_json' and not attisdropped) then
             alter table staging.pipeline_trigger_requests add column config_json jsonb default '{}'::jsonb not null;
         end if;

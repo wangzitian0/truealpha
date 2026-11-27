@@ -119,7 +119,7 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
                     "values ('smoke_source', 'smoke_metric', 42, 'real db smoke')"
                 )
                 su_conn.execute(
-                    "insert into mart.output_invariant_results "
+                    "insert into ops.output_invariant_results "
                     "(dagster_run_id, checked_at, invariant_id, kind, population, violation_count, deferred, sample_rows) "
                     "values ('dagster-smoke-1', now(), 'smoke-invariant-1', 'fact', 10, 0, false, '[]'::jsonb)"
                 )
@@ -210,7 +210,7 @@ def test_smoke_role_enforces_privilege_boundaries_and_fails_on_forbidden_reads(
         with psycopg.connect(ctx.smoke_url) as conn:
             conn.execute("set local role app_ops_reader")
             conn.execute("select 1 from mart.served_head limit 1").fetchall()
-            conn.execute("select 1 from mart.output_invariant_results limit 1").fetchall()
+            conn.execute("select 1 from ops.output_invariant_results limit 1").fetchall()
             conn.execute("select 1 from staging.ingestion_health_log limit 1").fetchall()
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute("select 1 from app.principal_credentials limit 1").fetchall()

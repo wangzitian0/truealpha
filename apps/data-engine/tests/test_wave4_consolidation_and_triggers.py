@@ -92,7 +92,7 @@ def test_pipeline_trigger_sensor_dispatches_nightly_backtest(monkeypatch: pytest
 
     class _FakeConn:
         def execute(self, sql: str, params: Any = None) -> _FakeRes:
-            if "from staging.pipeline_trigger_requests" in sql:
+            if "from ops.pipeline_trigger_requests" in sql:
                 return _FakeRes(
                     [
                         (
@@ -110,7 +110,7 @@ def test_pipeline_trigger_sensor_dispatches_nightly_backtest(monkeypatch: pytest
                         )
                     ]
                 )
-            if "update staging.pipeline_trigger_requests" in sql:
+            if "update ops.pipeline_trigger_requests" in sql:
                 updates.append(params)
             return _FakeRes([])
 
@@ -164,9 +164,9 @@ def test_pipeline_trigger_sensor_skips_unknown_job_name(monkeypatch: pytest.Monk
 
     class _FakeConn:
         def execute(self, sql: str, params: Any = None) -> _FakeRes:
-            if "from staging.pipeline_trigger_requests" in sql:
+            if "from ops.pipeline_trigger_requests" in sql:
                 return _FakeRes([(77, executed_at, dedupe, "nonexistent_pipeline_job", False, {})])
-            if "update staging.pipeline_trigger_requests" in sql:
+            if "update ops.pipeline_trigger_requests" in sql:
                 updates.append(params)
             return _FakeRes([])
 

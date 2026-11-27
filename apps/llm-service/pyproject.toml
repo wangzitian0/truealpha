@@ -1,7 +1,7 @@
 [project]
 name = "truealpha-llm-service"
 version = "0.1.0"
-description = "FastAPI: MCP endpoint (priority) + /chat SSE (Tier 3). Reads only the mart schema via the mart_readonly role."
+description = "FastAPI: OpenAPI 3.1 API and MCP surface over role-scoped mart, ops, and app sessions."
 requires-python = ">=3.12"
 dependencies = [
     # >=0.162: FastAPI exports the stable HTTP server telemetry itself (server spans and

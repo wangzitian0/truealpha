@@ -419,7 +419,7 @@ def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
     )
 
 
-model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
+model_key_health_schedule = build_model_key_health_schedule(settings.environment)
 
 
 def _run_dashboard_verdict(

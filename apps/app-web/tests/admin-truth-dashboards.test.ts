@@ -81,7 +81,7 @@ __setApiFetch(async (input) => {
             nightly_verdicts: [
               { check_name: "output_invariants", ok: true, freshness_state: "pass", age_hours: 2.0, max_age_hours: 48.0, ran_at: "2026-11-25T01:00:00Z", summary: "all hard checks clean", dagster_run_id: "dag-1" },
               { check_name: "topt_baseline", ok: true, freshness_state: "stale", age_hours: 72.0, max_age_hours: 48.0, ran_at: "2026-11-22T01:00:00Z", summary: "overdue check", dagster_run_id: "dag-0" },
-              { check_name: "model_key_health", ok: null, freshness_state: "missing", age_hours: null, max_age_hours: 48.0, ran_at: null, summary: "missing from mart.nightly_verdicts", dagster_run_id: null },
+              { check_name: "model_key_health", ok: null, freshness_state: "missing", age_hours: null, max_age_hours: 48.0, ran_at: null, summary: "missing from ops.nightly_verdicts", dagster_run_id: null },
             ],
             failed_job_errors: [{ run_id: "dag-err-1", logged_at: "2026-11-25T00:30:00Z", first_line_error: "Upstream timeout 504" }],
             runs: [{ run_id: "dag-1", job_name: "topt_live_pipeline", status: "SUCCESS", created_at: "2026-11-25T00:00:00Z", duration_seconds: 90 }],

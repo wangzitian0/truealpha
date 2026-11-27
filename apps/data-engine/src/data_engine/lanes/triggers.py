@@ -32,12 +32,12 @@ BOOT_CANARY_TAG = "truealpha/boot_canary"
 
 def consume_head_rollback_requests(connection: Any) -> list[str]:
     """Advance append-only mart.current_pointer rows for any unconsumed rollback requests."""
-    reg = connection.execute("select to_regclass('staging.head_rollback_requests')").fetchone()
+    reg = connection.execute("select to_regclass('ops.head_rollback_requests')").fetchone()
     if not reg or reg[0] is None:
         return []
     pending = connection.execute(
         "select request_id, environment, universe_id, universe_version, factor_id, target_run_id, requested_at "
-        "from staging.head_rollback_requests where consumed_at is null order by request_id limit 5"
+        "from ops.head_rollback_requests where consumed_at is null order by request_id limit 5"
     ).fetchall()
     if not pending:
         return []
@@ -71,7 +71,7 @@ def consume_head_rollback_requests(connection: Any) -> list[str]:
             repo.advance(pointer)
             pointer_id = pointer.pointer_id
         connection.execute(
-            "update staging.head_rollback_requests "
+            "update ops.head_rollback_requests "
             "set consumed_at = clock_timestamp(), result_pointer_id = %s where request_id = %s",
             (pointer_id, request_id),
         )
@@ -107,7 +107,7 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
             "select request_id, executed_at, dedupe_key, job_name, "
             "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false), "
             "coalesce(to_jsonb(request)->'config_json', '{}'::jsonb) "
-            "from staging.pipeline_trigger_requests request "
+            "from ops.pipeline_trigger_requests request "
             "where consumed_at is null order by request_id limit 5"
         ).fetchall()
         for request_id, executed_at, dedupe_key, job_name, force_fetch, raw_config in pending:
@@ -134,7 +134,7 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                 except Exception as exc:  # noqa: BLE001
                     context.log.warning(f"Skipping invalid backtest trigger request {request_id}: {exc}")
                     connection.execute(
-                        "update staging.pipeline_trigger_requests "
+                        "update ops.pipeline_trigger_requests "
                         "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",
                         (f"invalid:{dedupe_key}", request_id),
                     )
@@ -149,14 +149,14 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                 if tick is None:
                     context.log.warning(f"Skipping unrecognized trigger job_name={job_name!r} (request {request_id})")
                     connection.execute(
-                        "update staging.pipeline_trigger_requests "
+                        "update ops.pipeline_trigger_requests "
                         "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",
                         (f"invalid:{dedupe_key}", request_id),
                     )
                     continue
                 yield _tick_run_request(run_key, tick, exec_iso, force_fetch=bool(force_fetch))
             connection.execute(
-                "update staging.pipeline_trigger_requests "
+                "update ops.pipeline_trigger_requests "
                 "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",
                 (run_key, request_id),
             )

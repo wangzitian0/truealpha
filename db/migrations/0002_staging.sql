@@ -2000,10 +2000,11 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.iss
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.issuer_segment_revenue_facts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6f6441f8cbf8b43ad6db6cca44cab3ed') then drop trigger if exists reject_mutation on staging.issuer_segment_revenue_facts; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_segment_revenue_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.market_prices_daily'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1afdcd030642604e375467d5deafaa36') then drop trigger if exists trg_market_prices_daily_append_only on staging.market_prices_daily; CREATE TRIGGER trg_market_prices_daily_append_only BEFORE DELETE OR UPDATE ON staging.market_prices_daily FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.model_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f4eed3ab505235da7ad42f852a85b296') then drop trigger if exists reject_mutation on staging.model_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.model_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '60b2cbed702e09257811e325bd3d8422') then drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests; CREATE TRIGGER reject_trigger_delete BEFORE DELETE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.reject_pipeline_trigger_delete(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ccb40a047cd2d232acdbb00c9659605b') then drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests; CREATE TRIGGER validate_trigger_update BEFORE UPDATE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.validate_pipeline_trigger_update(); end if; end $$;
+do $$ begin if exists (select 1 from pg_class where oid = to_regclass('staging.pipeline_trigger_requests') and relkind = 'r') and not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '60b2cbed702e09257811e325bd3d8422') then drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests; CREATE TRIGGER reject_trigger_delete BEFORE DELETE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.reject_pipeline_trigger_delete(); end if; end $$;
+do $$ begin if exists (select 1 from pg_class where oid = to_regclass('staging.pipeline_trigger_requests') and relkind = 'r') and not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ccb40a047cd2d232acdbb00c9659605b') then drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests; CREATE TRIGGER validate_trigger_update BEFORE UPDATE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.validate_pipeline_trigger_update(); end if; end $$;
 do $$ begin
-  if not exists (
+  if exists (select 1 from pg_class where oid = to_regclass('staging.head_rollback_requests') and relkind = 'r')
+     and not exists (
     select 1 from pg_trigger
     where tgrelid = 'staging.head_rollback_requests'::regclass
       and not tgisinternal
@@ -2015,7 +2016,8 @@ do $$ begin
   end if;
 end $$;
 do $$ begin
-  if not exists (
+  if exists (select 1 from pg_class where oid = to_regclass('staging.head_rollback_requests') and relkind = 'r')
+     and not exists (
     select 1 from pg_trigger
     where tgrelid = 'staging.head_rollback_requests'::regclass
       and not tgisinternal

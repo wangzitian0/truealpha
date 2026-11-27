@@ -512,7 +512,7 @@ class PostgresCoreRepository:
             """
             select environment, cutoff, universe_id, universe_version, universe_sha256,
                    obligation_count, success_count, unchanged_count
-            from mart.capture_status where run_id = %s
+            from ops.capture_status where run_id = %s
             """,
             (run_id,),
         ).fetchone()

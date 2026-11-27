@@ -378,6 +378,7 @@ class EnvironmentContract(CanonicalHash, StrictFrozenModel):
     code_server_capacity: CodeServerCapacity
     model_seat: ModelSeatContract
     nightly_verdicts: Any
+    standards_plane_schedules: Any
     metric_applicability: tuple[MetricApplicabilityExclusion, ...] = ()
 
     @model_validator(mode="after")
@@ -432,6 +433,23 @@ class EnvironmentContract(CanonicalHash, StrictFrozenModel):
         if bad_rtb or not nv.get("checks") or not nv.get("per_universe"):
             raise ValueError("invalid bounds/verdicts")
         rtb["margin"], rtb["floor_minutes"] = float(rtb["margin"]), float(rtb["floor_minutes"])
+        sps = dict(self.standards_plane_schedules)
+        _keys(sps, {"description", "schedules"}, name="standards_plane_schedules")
+        if not sps.get("description") or not isinstance(sps["schedules"], Mapping) or not sps["schedules"]:
+            raise ValueError("invalid standards_plane_schedules")
+        scheds: dict[str, Any] = {}
+        for sname, raw_spec in sps["schedules"].items():
+            _keys(raw_spec, {"cron", "status"}, name=f"standards_plane_schedules.{sname}")
+            cron = str(raw_spec["cron"]).strip()
+            if len(cron.split()) != 5:
+                raise ValueError(f"standards_plane_schedules.{sname}: invalid cron {cron!r}")
+            statuses = raw_spec["status"]
+            if not isinstance(statuses, Mapping) or set(statuses) != set(_ENVS):
+                raise ValueError(f"standards_plane_schedules.{sname}: status must cover {sorted(_ENVS)}")
+            if any(v not in ("scheduled", "stopped") for v in statuses.values()):
+                raise ValueError(f"standards_plane_schedules.{sname}: invalid status value")
+            scheds[str(sname)] = box_attrs({"cron": cron, "status": box_attrs(dict(statuses))})
+        sps_boxed = box_attrs({"description": sps["description"], "schedules": box_attrs(scheds)})
         va = _validate_vendor_accounts(self.vendor_accounts)
         for attr, val in (
             ("sentinels", sent),
@@ -439,6 +457,7 @@ class EnvironmentContract(CanonicalHash, StrictFrozenModel):
             ("vendor_accounts", va),
             ("run_time_bounds", rtb),
             ("nightly_verdicts", nv),
+            ("standards_plane_schedules", sps_boxed),
         ):
             object.__setattr__(self, attr, val)
         if unknown := sorted(set(self.model_seat.environments) - set(envs)):
@@ -489,6 +508,15 @@ class EnvironmentContract(CanonicalHash, StrictFrozenModel):
 
     def scheduled_universes(self, env: str | None) -> tuple[str, ...]:
         return () if (s := self._spec(env)) is None else tuple(e.key for e in s.universes if e.status == "scheduled")
+
+    def standards_plane_crons(self) -> dict[str, str]:
+        return {name: str(spec.cron) for name, spec in self.standards_plane_schedules["schedules"].items()}
+
+    def is_standards_schedule_scheduled(self, schedule_name: str, env: str | None) -> bool:
+        spec = self.standards_plane_schedules["schedules"].get(schedule_name)
+        if spec is None:
+            return False
+        return str(spec.status.get(self.normalize_environment(env), "stopped")) == "scheduled"
 
     def expects_verdict(self, check: str, env: str | None) -> bool:
         p, at, ln = check.partition("@")

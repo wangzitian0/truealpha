@@ -8,7 +8,7 @@ This module tests the four core pillars of Topic 2:
 2. Scope SSOT & Denominator Integrity:
    - Obligation planning strictly computes the exact Cartesian product of members and semantics.
    - Anti-exclusion: No dropping failing tickers to fabricate a green completion status.
-   - mart.capture_status.complete is strictly count(result_id) = count(obligation_id).
+   - ops.capture_status.complete is strictly count(result_id) = count(obligation_id).
 3. PIT Storage & §8 Status Dimensions:
    - staging.capture_normalized_observations.knowable_at has NO default clock expression.
    - Constraint recorded_at >= knowable_at prevents physical ingestion before knowable-at cutoff.
@@ -411,7 +411,7 @@ def test_pit_schema_constraint_recorded_at_must_be_after_knowable_at(db_conn: ps
 
 
 def test_scope_ssot_mart_capture_status_denominator_and_completion(db_conn: psycopg.Connection[Any]) -> None:
-    """mart.capture_status derives obligation_count from raw obligations and checks completion."""
+    """ops.capture_status derives obligation_count from raw obligations and checks completion."""
     label = f"scope_test_{datetime.now(UTC).timestamp()}"
     universe = UniverseRef(
         universe_id=f"universe:{label}",
@@ -462,7 +462,7 @@ def test_scope_ssot_mart_capture_status_denominator_and_completion(db_conn: psyc
 
     # Before results are inserted: obligation_count == 4, terminal_count == 0, complete == false
     status = db_conn.execute(
-        "select obligation_count, terminal_count, complete from mart.capture_status where run_id = %s",
+        "select obligation_count, terminal_count, complete from ops.capture_status where run_id = %s",
         (run.run_id,),
     ).fetchone()
     assert status is not None
@@ -672,7 +672,7 @@ def test_5_hop_backward_lineage_trace_from_mart_to_s3_bytes(db_conn: psycopg.Con
             f.payload_sha256,
             f.byte_length
         from mart.metric_node_values m
-        join mart.capture_status cs on cs.run_id = m.run_id
+        join ops.capture_status cs on cs.run_id = m.run_id
         cross join lateral unnest(m.input_observation_ids) as input_obs(obs_id)
         join staging.capture_normalized_observations obs on obs.observation_id = input_obs.obs_id
         left join staging.capture_observation_payloads pl on pl.observation_id = obs.observation_id

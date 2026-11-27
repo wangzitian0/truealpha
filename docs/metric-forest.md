@@ -410,7 +410,7 @@ append-only. Each row carries:
 - `period_tag`, `value numeric` and `unit`;
 - `availability_status`, `reason_codes` (the evaluator's `undefined` reasons: `missing_input`,
   `undefined_operand`, `zero_denominator`);
-- `source_evidence_status`, `factor_validation_status` (#747);
+- `source_evidence_status` (legacy `factor_validation_status` column retired in Wave C2 with default `'not_evaluated'`);
 - `confidence`, and the legacy `confidence_band` column (no writer fills it and no reader selects it; the MCP reader derives the band from `confidence`);
 - `tree_id`, `tree_version` and `tree_sha256` for derived cells;
 - `input_observation_ids`.

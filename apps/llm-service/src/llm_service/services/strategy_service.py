@@ -589,7 +589,7 @@ def trigger_backtest_run(
     *,
     database_url: str | None = None,
 ) -> TriggerBacktestResponse:
-    """Queue a governed nightly backtest execution via `staging.pipeline_trigger_requests`."""
+    """Queue a governed nightly backtest execution via `ops.pipeline_trigger_requests`."""
     payload = req or TriggerBacktestRequest()
     prepared = prepare_backtest_trigger(
         definition_resource=payload.definition_resource,

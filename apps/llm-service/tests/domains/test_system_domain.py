@@ -159,7 +159,7 @@ def test_data_engine_facts_avoids_staging_and_does_not_swallow_bugs(
     class _FirstFailsCur(_FakeCur):
         def execute(self, sql: str, *_a: Any) -> _FirstFailsCur:
             executed_sql.append(sql)
-            if "mart.data_engine_identity" in sql:
+            if "ops.data_engine_identity" in sql:
                 raise psycopg.errors.UndefinedTable("missing identity table")
             return self
 
@@ -174,4 +174,4 @@ def test_data_engine_facts_avoids_staging_and_does_not_swallow_bugs(
     assert (sha, digest, ptr, vrd) == ("unknown", "unknown", [], [])
     assert savepoints == {"entered": 3, "rolled_back": 1}
     assert any("from mart.served_head" in q for q in executed_sql)
-    assert any("from mart.nightly_verdicts" in q for q in executed_sql)
+    assert any("from ops.nightly_verdicts" in q for q in executed_sql)

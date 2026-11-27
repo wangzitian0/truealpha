@@ -465,14 +465,13 @@ Modules 1-6 are **base factors** (Section 4, `common/factors/src/factors/base`) 
 - **Gate 3 — #31 (#41-#46, #48, #72, plus registered additions #229/#235/#236/#251):** the deployed consumers agree on typed materialized outputs and bounded usage/review reads from the same governed head; fixture conformance suites are CI-only evidence and do not close a consumption issue (AGENTS.md rule 6, audit #429). #72 separately proves configuration-only onboarding for an unseen issuer/theme and additive onboarding for one test source plus one semantic type; the latter may add isolated extension code and one probe factor, but cannot change central dispatch, generic Dagster/snapshot/lineage/usage/review code, existing factors, or consumers.
 - **Gate 4 — #32 (#11, #49-#54, #66-#68):** the exact signed release manifest and full approved `UniverseRef` pass natural-refresh soak, anti-shrink SLOs, usage and reverse-quality reconciliation, mandatory Production authentication, full-scope capacity tests, scheduled database and raw-object backups with a visible restore age, real-client equivalence, and a human look at the card deck. #67 produces the full-universe Production shadow candidate; #68 independently certifies its row-complete capture; #54 then reads the dashboards for scope, backup age, consumers, capture, usage and quality and records authoritative graduation. Seeded bad evidence writes `disagree` rows to `mart.oracle_outcomes` and lowers cell confidence on `/admin/datahub`.
 
-**Availability and validation are separate**. Every factor output carries an
+**Availability and source evidence are separate**. Every factor output carries an
 `availability_status` such as `available`, `unavailable`, `stale`, `excluded`,
 `low_confidence`, or `error`, plus a `source_evidence_status` for the selected semantic
-records and a separate `factor_validation_status` for the factor version's independent
-golden/holdout gate. Only applicable, available, fresh outputs from an accepted factor
-version count toward the module's versioned usable-coverage SLO. A low confidence score does
-not remove an output from that count. Consumers display all
-three dimensions rather than conflating source evidence with formula validation.
+records (the former `factor_validation_status` column was retired in Wave C2). Only
+applicable, available, fresh outputs count toward the module's versioned usable-coverage
+SLO. A low confidence score does not remove an output from that count. Consumers display
+both dimensions rather than conflating source evidence with availability.
 
 Environment and evidence scale are part of the gate contract. Local/CI exist
 throughout; Dagster is introduced early in Gate 1 and is the only authority for real

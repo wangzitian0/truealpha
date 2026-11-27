@@ -416,6 +416,27 @@
       "theme_purity": {"cadence_hours": 24, "job": "head_reports_pipeline", "kind": "fact"}
     }
   },
+  "standards_plane_schedules": {
+    "description": "Staggered Standards Plane Dagster schedules and per-environment running status.",
+    "schedules": {
+      "nport_monthly_schedule": {
+        "cron": "7 11 1 * *",
+        "status": {"preview": "stopped", "staging": "stopped", "production": "stopped"}
+      },
+      "13f_quarterly_schedule": {
+        "cron": "7 12 15 1,4,7,10 *",
+        "status": {"preview": "stopped", "staging": "stopped", "production": "stopped"}
+      },
+      "form4_daily_schedule": {
+        "cron": "7 13 * * *",
+        "status": {"preview": "stopped", "staging": "stopped", "production": "stopped"}
+      },
+      "10k_annual_schedule": {
+        "cron": "7 14 * * 0",
+        "status": {"preview": "stopped", "staging": "stopped", "production": "stopped"}
+      }
+    }
+  },
   "metric_applicability": [
     {
       "metric": "gppe",
