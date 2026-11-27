@@ -11,7 +11,11 @@ from truealpha_contracts.environment_contract import EnvironmentContract, Unknow
 from truealpha_contracts.strategy import ExclusionReason
 from truealpha_contracts.universes import id_prefix_like, key_of_lane, keys, lane_name, universes_with_role
 from truealpha_runtime.access import AccessContext
-from truealpha_runtime.issuer_modules_mart import ENTITY_DISPLAY_SQL, resolve_static_entity_display
+from truealpha_runtime.issuer_modules_mart import (
+    ENTITY_DISPLAY_SQL,
+    _display_keys_for_row,
+    resolve_static_entity_display,
+)
 from truealpha_runtime.research_report_mart import (
     POINTER_HEAD_SQL,
     MetricNodeValueReport,
@@ -167,26 +171,31 @@ def _display_label(issuer_id: str, display_map: dict[str, EntityDisplayItem]) ->
     return resolve_static_entity_display(issuer_id)[2]
 
 
-def load_entity_display_items(*, database_url: str | None = None) -> dict[str, EntityDisplayItem]:
-    def _q(cur: Any) -> dict[str, EntityDisplayItem]:
-        cur.execute(ENTITY_DISPLAY_SQL)
-        out: dict[str, EntityDisplayItem] = {}
-        for row in cur.fetchall():
-            issuer_id = str(row["issuer_id"])
-            ticker = str(row.get("ticker") or "").strip()
-            display_name = str(row.get("display_name") or "").strip() or None
-            if ticker and display_name:
-                label = f"{ticker} · {display_name}"
+def load_entity_display_items_from_cursor(cur: Any) -> dict[str, EntityDisplayItem]:
+    """Load `mart.entity_identity` issuer display items indexed by canonical and legacy keys."""
+    cur.execute(ENTITY_DISPLAY_SQL)
+    out: dict[str, EntityDisplayItem] = {}
+    for row in cur.fetchall():
+        issuer_id = str(row.get("issuer_id") or "").strip()
+        if not issuer_id:
+            continue
+        ticker = str(row.get("ticker") or "").strip()
+        display_name = str(row.get("display_name") or "").strip() or None
+        if ticker and display_name:
+            label = display_name if display_name.startswith(f"{ticker} ·") else f"{ticker} · {display_name}"
+        else:
+            label = ticker or display_name or issuer_id
+        item = EntityDisplayItem(issuer_id=issuer_id, ticker=ticker, display_name=display_name, label=label)
+        for idx, key in enumerate(_display_keys_for_row(row)):
+            if idx == 0:
+                out[key] = item
             else:
-                label = ticker or display_name or issuer_id
-            item = EntityDisplayItem(issuer_id=issuer_id, ticker=ticker, display_name=display_name, label=label)
-            out[issuer_id] = item
-            legacy_id = row.get("legacy_id")
-            if isinstance(legacy_id, str) and legacy_id and legacy_id not in out:
-                out[legacy_id] = item
-        return out
+                out.setdefault(key, item)
+    return out
 
-    return with_mart_readonly(_q, database_url=database_url)
+
+def load_entity_display_items(*, database_url: str | None = None) -> dict[str, EntityDisplayItem]:
+    return with_mart_readonly(load_entity_display_items_from_cursor, database_url=database_url)
 
 
 _PANEL_NODE_KEY_ALIASES: dict[str, tuple[str, ...]] = {
@@ -195,9 +204,7 @@ _PANEL_NODE_KEY_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _load_wide_panel(
-    node_keys: tuple[str, ...], *, database_url: str | None = None
-) -> dict[str, dict[str, WidePanelCellDto]]:
+def _load_wide_panel_from_cursor(cur: Any, node_keys: tuple[str, ...]) -> dict[str, dict[str, WidePanelCellDto]]:
     requested = set(node_keys)
     query_keys: list[str] = []
     seen_q: set[str] = set()
@@ -227,33 +234,36 @@ def _load_wide_panel(
         "price": "last_close",
     }
 
-    def _q(cur: Any) -> dict[str, dict[str, WidePanelCellDto]]:
-        cur.execute(sql, (query_keys,))
-        by_issuer: dict[str, dict[str, WidePanelCellDto]] = {}
-        for row in cur.fetchall():
-            iid = row.get("issuer_id")
-            nkey = row.get("node_key")
-            if not isinstance(iid, str) or not isinstance(nkey, str):
+    cur.execute(sql, (query_keys,))
+    by_issuer: dict[str, dict[str, WidePanelCellDto]] = {}
+    for row in cur.fetchall():
+        iid = row.get("issuer_id")
+        nkey = row.get("node_key")
+        if not isinstance(iid, str) or not isinstance(nkey, str):
+            continue
+        bucket = by_issuer.setdefault(iid, {})
+        targets = [nkey] if nkey in requested else []
+        if (aliased := alias_targets.get(nkey)) and aliased in requested and aliased not in targets:
+            targets.append(aliased)
+        for target_key in targets:
+            if target_key in bucket and target_key != nkey:
                 continue
-            bucket = by_issuer.setdefault(iid, {})
-            targets = [nkey] if nkey in requested else []
-            if (aliased := alias_targets.get(nkey)) and aliased in requested and aliased not in targets:
-                targets.append(aliased)
-            for target_key in targets:
-                if target_key in bucket and target_key != nkey:
-                    continue
-                if target_key in bucket and target_key == nkey:
-                    continue
-                bucket[target_key] = WidePanelCellDto(
-                    node_key=target_key,
-                    period=row.get("period"),
-                    value=row.get("value"),
-                    confidence=row.get("confidence"),
-                    availability=str(row.get("availability_status") or "unavailable"),
-                )
-        return by_issuer
+            if target_key in bucket and target_key == nkey:
+                continue
+            bucket[target_key] = WidePanelCellDto(
+                node_key=target_key,
+                period=row.get("period"),
+                value=row.get("value"),
+                confidence=row.get("confidence"),
+                availability=str(row.get("availability_status") or "unavailable"),
+            )
+    return by_issuer
 
-    return with_mart_readonly(_q, database_url=database_url)
+
+def _load_wide_panel(
+    node_keys: tuple[str, ...], *, database_url: str | None = None
+) -> dict[str, dict[str, WidePanelCellDto]]:
+    return with_mart_readonly(lambda cur: _load_wide_panel_from_cursor(cur, node_keys), database_url=database_url)
 
 
 def metric_node_values(
@@ -350,20 +360,24 @@ def load_universes_panel(*, database_url: str | None = None) -> UniverseOverview
             if kind not in seen:
                 seen.add(kind)
                 heads.append(row)
-        members: dict[str, list[dict[str, Any]]] = {}
-        for head in heads:
-            ukey = key_of_lane(str(head["kind"]))
+        members: dict[str, list[dict[str, Any]]] = {str(head["kind"]): [] for head in heads}
+        if heads:
+            ukey_to_kind = {key_of_lane(str(head["kind"])): str(head["kind"]) for head in heads}
             cur.execute(
                 """
-                select ticker, company_name, cik, figi, market_cap::text as market_cap,
+                select etf_symbol, ticker, company_name, cik, figi, market_cap::text as market_cap,
                        as_of::text as as_of, source, fetch_sha256
                 from mart.universe_constituents
-                where etf_symbol = %s
-                order by ticker
+                where etf_symbol = any(%s::text[])
+                order by etf_symbol, ticker
                 """,
-                (ukey,),
+                (list(ukey_to_kind),),
             )
-            members[str(head["kind"])] = [dict(r) for r in cur.fetchall()]
+            for r in cur.fetchall():
+                row_dict = dict(r)
+                kind_name = ukey_to_kind.get(str(row_dict.pop("etf_symbol", "")))
+                if kind_name is not None:
+                    members[kind_name].append(row_dict)
         return UniverseOverviewResponse(heads=heads, history=history, members=members)
 
     return with_mart_readonly(_q, database_url=database_url)
@@ -412,9 +426,38 @@ def load_wide_panel_coverage(
             database_url=database_url,
         ).model_dump(mode="json")
 
-    report: StrategyRunReport | StrategyRunUnavailable = PostgresStrategyRunRepository(database_url=db_url).get_latest(
-        strategy_id=strategy_id, context=context, universe=norm_universe
-    )
+    repo = PostgresStrategyRunRepository(database_url=db_url)
+
+    def _q(
+        cur: Any,
+    ) -> tuple[
+        StrategyRunReport | StrategyRunUnavailable,
+        dict[str, EntityDisplayItem],
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, WidePanelCellDto]],
+    ]:
+        rep = repo.get_latest_from_cursor(
+            cur,
+            strategy_id=strategy_id,
+            context=context,
+            universe=norm_universe,
+        )
+        if isinstance(rep, StrategyRunUnavailable):
+            return rep, {}, {}, {}
+        d_map = load_entity_display_items_from_cursor(cur)
+        # Read provenance only when filtering to a specific universe; universe='all' keeps all rows.
+        p_map: dict[str, dict[str, Any]] = (
+            read_strategy_provenance(cur, rep.strategy_run_id) if norm_universe != "all" and rep.strategy_run_id else {}
+        )
+        w_panel = _load_wide_panel_from_cursor(cur, WIDE_PANEL_INPUT_KEYS)
+        return rep, d_map, p_map, w_panel
+
+    try:
+        report, display_map, prov_map, wide_panel = with_mart_readonly(_q, database_url=database_url)
+    except psycopg.Error:
+        report = StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")
+        display_map, prov_map, wide_panel = {}, {}, {}
+
     if isinstance(report, StrategyRunUnavailable):
         return PanelCoverageResponse(
             available=False,
@@ -423,18 +466,6 @@ def load_wide_panel_coverage(
             universe=norm_universe,
             node_values_report=node_report_dict,
         )
-
-    display_map = load_entity_display_items(database_url=database_url)
-    prov_map: dict[str, dict[str, Any]] = {}
-    if run_id := report.strategy_run_id:
-        prov_map = with_mart_readonly(
-            lambda cur: read_strategy_provenance(cur, run_id),
-            database_url=database_url,
-        )
-    wide_panel = _load_wide_panel(
-        WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS,
-        database_url=database_url,
-    )
     target_cutoff = cutoff or max((d.cutoff_at.isoformat() for d in report.decisions), default=None)
     filtered = [
         d

@@ -454,8 +454,17 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
             executed_sqls.append(sql)
 
         def fetchall(self) -> list[dict[str, Any]]:
-            if "from mart.entity_display_resolution" in self._last_sql:
-                return [{"issuer_id": "issuer:cik:0000723125", "ticker": "MU", "display_name": "Micron"}]
+            if "from mart.entity_identity" in self._last_sql:
+                return [
+                    {
+                        "issuer_id": "11111111-1111-1111-1111-111111111111",
+                        "ticker": "MU",
+                        "display_name": "Micron",
+                        "legacy_id": "issuer:cik:0000723125",
+                        "cik": "0000723125",
+                        "lei": None,
+                    }
+                ]
             return []
 
         def fetchone(self) -> dict[str, Any] | None:
@@ -498,7 +507,7 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
         uuid_str = "11111111-1111-1111-1111-111111111111"
         return [iid, uuid_str], {uuid_str: "issuer:cik:0000723125"}
 
-    monkeypatch.setattr(entities_service, "get_strategy_run_page", _fake_page)
+    monkeypatch.setattr(strategy_service, "get_strategy_run_page", _fake_page)
     monkeypatch.setattr(entities_service, "with_mart_readonly", _fake_with_mart)
     monkeypatch.setattr(entities_service, "resolve_issuer_identity_from_cursor", _fake_identity)
 
@@ -516,8 +525,206 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
     assert len(executed_sqls) == 7
     assert any("from mart.issuer_basic_info" in sql for sql in executed_sqls)
     assert all("= any(%s::text[])" in sql for sql in executed_sqls)
+    assert all("mart.entity_display_resolution" not in sql for sql in executed_sqls)
     assert not any("in (select ei." in sql for sql in executed_sqls)
-    assert not any("mart.entity_identity" in sql for sql in executed_sqls)
+    assert not any("mart.entity_identity" in sql for sql in executed_sqls[1:])
+
+
+def test_get_trace_avoids_loading_strategy_page_and_pools_single_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm_service.services import strategy_service as strat_mod
+
+    mart_conn_calls = 0
+
+    def _fail_page(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("get_trace must not load get_strategy_run_page when page is None")
+
+    class _Cur:
+        def __init__(self) -> None:
+            self._sql = ""
+
+        def execute(self, sql: str, _params: Any = None) -> None:
+            self._sql = sql
+
+        def fetchone(self) -> dict[str, Any] | None:
+            if "from mart.strategy_decisions" in self._sql:
+                return {
+                    "issuer_id": "11111111-1111-1111-1111-111111111111",
+                    "strategy_run_id": "strategy-run:1",
+                    "corpus_sha256": "a" * 64,
+                    "cutoff_at": "2026-06-30T00:00:00Z",
+                    "eligible": True,
+                    "tier": "high",
+                    "outcome": "eligible",
+                    "availability_status": "available",
+                }
+            return None
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            if "from mart.entity_identity" in self._sql:
+                return [
+                    {
+                        "issuer_id": "11111111-1111-1111-1111-111111111111",
+                        "ticker": "NVDA",
+                        "display_name": "NVIDIA Corp",
+                        "legacy_id": "issuer:cik:0001045810",
+                        "cik": "0001045810",
+                        "lei": None,
+                    }
+                ]
+            return []
+
+    def _fake_with_mart(fn: Any, **_k: Any) -> Any:
+        nonlocal mart_conn_calls
+        mart_conn_calls += 1
+        return fn(_Cur())
+
+    monkeypatch.setattr(strat_mod, "get_strategy_run_page", _fail_page)
+    monkeypatch.setattr(entities_service, "with_mart_readonly", _fake_with_mart)
+    monkeypatch.setattr(
+        entities_service,
+        "resolve_issuer_identity_from_cursor",
+        lambda _c, iid: ([iid, "11111111-1111-1111-1111-111111111111"], {"11111111-1111-1111-1111-111111111111": iid}),
+    )
+    monkeypatch.setattr(entities_service, "read_trace_lineage", lambda *_a: ("res:1", "list:1", []))
+
+    ctx = auth_service.access_context_for(
+        auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
+    )
+    tr = entities_service.get_trace(ctx, issuer_id="issuer:cik:0001045810", database_url="postgresql://x")
+    assert tr.available is True
+    assert tr.label == "NVDA · NVIDIA Corp"
+    assert tr.lineage_result_id == "res:1"
+    assert mart_conn_calls == 1
+
+
+def test_panel_coverage_pools_connection_and_skips_provenance_for_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm_service.services import panel_service
+    from truealpha_runtime.strategy_run import (
+        StrategyRunDecision,
+        StrategyRunOutcome,
+        StrategyRunReport,
+    )
+    from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
+
+    mart_conn_calls = 0
+
+    def _fake_with_mart(fn: Any, **_k: Any) -> Any:
+        nonlocal mart_conn_calls
+        mart_conn_calls += 1
+
+        class _Cur:
+            def execute(self, *_a: Any, **_k2: Any) -> None:
+                pass
+
+            def fetchall(self) -> list[dict[str, Any]]:
+                return []
+
+        return fn(_Cur())
+
+    sample_report = StrategyRunReport(
+        strategy_id="large_model_value_v0",
+        source="mart",
+        corpus_sha256="b" * 64,
+        strategy_run_id="strategy-run:1",
+        decisions=(
+            StrategyRunDecision(
+                issuer_id="issuer:cik:0000320193",
+                cutoff_at=datetime(2026, 6, 30, tzinfo=UTC),
+                outcome=StrategyRunOutcome.SELECTED,
+                eligible=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr(panel_service, "with_mart_readonly", _fake_with_mart)
+    monkeypatch.setattr(PostgresStrategyRunRepository, "get_latest_from_cursor", lambda *_a, **_k: sample_report)
+    monkeypatch.setattr(
+        panel_service,
+        "read_strategy_provenance",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not query provenance for universe=all")),
+    )
+
+    ctx = auth_service.access_context_for(
+        auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
+    )
+    cov = panel_service.load_wide_panel_coverage(ctx, universe="all", database_url="postgresql://x")
+    assert cov.available is True
+    assert cov.total_decisions == 1
+    assert mart_conn_calls == 1
+
+
+def test_aggregate_ledger_window_rows_matches_traffic_usage_and_errors() -> None:
+    rows = [
+        {
+            "day_str": "2026-11-27",
+            "source": "moomoo",
+            "total_calls": 10,
+            "failed_calls": 1,
+            "status_429": 0,
+            "code_1302": 1,
+            "today_dur_sum": 150,
+            "today_dur_cnt": 2,
+            "today_calls": 2,
+            "today_failed": 0,
+            "today_last_call": "2026-11-27 10:00:00Z",
+            "calls_1s": 0,
+            "calls_30s": 1,
+            "calls_60s": 2,
+            "calls_24h": 5,
+            "failed_24h": 1,
+            "rate_limited_24h": 1,
+            "calls_7d": 10,
+            "failed_7d": 1,
+        },
+        {
+            "day_str": "2026-11-26",
+            "source": "moomoo",
+            "total_calls": 20,
+            "failed_calls": 0,
+            "status_429": 0,
+            "code_1302": 0,
+            "today_dur_sum": 0,
+            "today_dur_cnt": 0,
+            "today_calls": 0,
+            "today_failed": 0,
+            "today_last_call": None,
+            "calls_1s": 0,
+            "calls_30s": 0,
+            "calls_60s": 0,
+            "calls_24h": 15,
+            "failed_24h": 0,
+            "rate_limited_24h": 0,
+            "calls_7d": 20,
+            "failed_7d": 0,
+        },
+    ]
+    traffic, usage, errs = admin_service._aggregate_ledger_window_rows(rows)
+    assert traffic == [
+        {
+            "source": "moomoo",
+            "calls": 2,
+            "failed": 0,
+            "last_call": "2026-11-27 10:00:00Z",
+            "avg_ms": 75,
+        }
+    ]
+    assert usage == [
+        {
+            "source": "moomoo",
+            "calls_1s": 0,
+            "calls_30s": 1,
+            "calls_60s": 2,
+            "calls_24h": 20,
+            "failed_24h": 1,
+            "rate_limited_24h": 1,
+            "calls_7d": 30,
+            "failed_7d": 1,
+        }
+    ]
+    assert len(errs) == 1 and errs[0]["day"] == "2026-11-27" and errs[0]["code_1302"] == 1
 
 
 def test_company_profile_reader_resolves_legacy_id_without_lateral_entity_identity_join(

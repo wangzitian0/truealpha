@@ -14,11 +14,11 @@ from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import (
     _ANALYST_RATINGS_BY_IDS_SQL,
     _SUPPLY_CHAIN_BY_IDS_SQL,
-    ENTITY_DISPLAY_SQL,
     AnalystRatings,
     IssuerModuleUnavailable,
     PostgresIssuerModuleReader,
     SupplyChainExposure,
+    _display_keys_for_row,
     resolve_issuer_candidates_from_cursor,
     resolve_issuer_identity_from_cursor,
     resolve_static_entity_display,
@@ -32,6 +32,7 @@ from llm_service.services.panel_service import (
     EntityDisplayItem,
     _display_label,
     _id_prefix_like,
+    load_entity_display_items_from_cursor,
     resolve_governed_head_run_id,
     served_run_predicate,
 )
@@ -40,7 +41,6 @@ from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
     StrategyDecisionItemDto,
     StrategyRunPageResponse,
-    get_strategy_run_page,
     normalize_peg_convention,
     resolve_decision_availability,
 )
@@ -312,17 +312,27 @@ def _entity_display_item_from_parts(issuer_id: str, ticker: str, display_name: s
     return EntityDisplayItem(issuer_id=issuer_id, ticker=ticker, display_name=clean_name, label=label)
 
 
+_SINGLE_ENTITY_DISPLAY_SQL = """
+select ei.entity_id::text as issuer_id,
+       coalesce(
+         case
+           when split_part(ei.listing_id, ':', 2) in ('xnas', 'xnys', 'arcx', 'bats')
+             then nullif(upper(split_part(ei.listing_id, ':', 3)), '')
+         end,
+         nullif(btrim(ei.current_ticker), '')
+       ) as ticker,
+       nullif(btrim(ei.name), '') as display_name,
+       ei.legacy_id,
+       nullif(btrim(ei.cik), '') as cik,
+       nullif(btrim(ei.lei), '') as lei
+from mart.entity_identity ei
+where ei.kind = 'issuer'
+  and (ei.entity_id::text = any(%s::text[]) or ei.legacy_id = any(%s::text[]))
+"""
+
+
 def _fetch_all_display_map_from_cursor(cur: Any) -> dict[str, EntityDisplayItem]:
-    cur.execute(ENTITY_DISPLAY_SQL)
-    out: dict[str, EntityDisplayItem] = {}
-    for row in cur.fetchall():
-        iid = str(row["issuer_id"])
-        item = _entity_display_item_from_parts(iid, str(row.get("ticker") or "").strip(), row.get("display_name"))
-        out[iid] = item
-        legacy_id = row.get("legacy_id")
-        if isinstance(legacy_id, str) and legacy_id and legacy_id not in out:
-            out[legacy_id] = item
-    return out
+    return load_entity_display_items_from_cursor(cur)
 
 
 def _fetch_issuer_display_map_from_cursor(
@@ -331,19 +341,16 @@ def _fetch_issuer_display_map_from_cursor(
     candidates: list[str],
     legacy_by_entity: dict[str, str],
 ) -> dict[str, EntityDisplayItem]:
-    cur.execute(
-        """
-        select issuer_id, nullif(btrim(ticker), '') as ticker, nullif(btrim(display_name), '') as display_name
-        from mart.entity_display_resolution
-        where issuer_id = any(%s::text[])
-        """,
-        (candidates,),
-    )
+    cur.execute(_SINGLE_ENTITY_DISPLAY_SQL, (candidates, candidates))
     out: dict[str, EntityDisplayItem] = {}
     for row in cur.fetchall():
         iid = str(row["issuer_id"])
         item = _entity_display_item_from_parts(iid, str(row.get("ticker") or "").strip(), row.get("display_name"))
-        out[iid] = item
+        for idx, key in enumerate(_display_keys_for_row(row)):
+            if idx == 0:
+                out[key] = item
+            else:
+                out.setdefault(key, item)
         if leg := legacy_by_entity.get(iid):
             out.setdefault(leg, item)
     if issuer_id not in out:
@@ -480,13 +487,18 @@ def get_trace(
     candidates: list[str] | None = None,
     database_url: str | None = None,
 ) -> TraceResponse:
+    del context
     if cutoff is not None and not _parses_as_instant(cutoff):
         return TraceResponse(available=False, reason="invalid_cutoff", issuer_id=issuer_id)
-    page = page if page is not None else get_strategy_run_page(context, cutoff=cutoff, database_url=database_url)
-    if not page.available:
+    if page is not None and not page.available:
         return TraceResponse(available=False, reason=page.reason, issuer_id=issuer_id)
-    decision = next(
-        (d for d in page.decisions if d.issuer_id == issuer_id or issuer_id.lower() in d.label.lower()), None
+    decision = (
+        next(
+            (d for d in page.decisions if d.issuer_id == issuer_id or issuer_id.lower() in d.label.lower()),
+            None,
+        )
+        if page is not None
+        else None
     )
     target_iid = decision.issuer_id if decision else issuer_id
 
@@ -500,7 +512,7 @@ def get_trace(
         str | None,
         list[dict[str, Any]],
     ]:
-        if decision is not None:
+        if decision is not None and page is not None:
             cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, target_iid)
             resolved_dec: StrategyDecisionItemDto | None = decision
             resolved_iid = target_iid
@@ -517,13 +529,13 @@ def get_trace(
                 resolved_iid = str(row["issuer_id"])
                 display_map = _fetch_issuer_display_map_from_cursor(cur, resolved_iid, cand, legacy_by_entity)
                 resolved_dec = _decision_row_to_dto(row, display_map=display_map)
-                run_id = str(row.get("strategy_run_id") or "") or page.strategy_run_id
-                corpus_sha = str(row.get("corpus_sha256") or "") or page.corpus_sha256
+                run_id = str(row.get("strategy_run_id") or "") or (page.strategy_run_id if page else "")
+                corpus_sha = str(row.get("corpus_sha256") or "") or (page.corpus_sha256 if page else "")
             else:
                 resolved_dec = None
                 resolved_iid = target_iid
-                run_id = page.strategy_run_id
-                corpus_sha = page.corpus_sha256
+                run_id = page.strategy_run_id if page else ""
+                corpus_sha = page.corpus_sha256 if page else ""
         nodes = _fetch_trace_nodes_from_cursor(cur, cand)
         res_id: str | None = None
         lin_inputs: list[dict[str, Any]] = []
@@ -586,10 +598,6 @@ def _fetch_issuer_basic_info_from_cursor(cur: Any, candidates: list[str]) -> Iss
     try:
         if callable(tx):
             with tx():
-                cur.execute("select to_regclass('mart.issuer_basic_info') as reg")
-                reg_row = cur.fetchone()
-                if reg_row is not None and reg_row.get("reg") is None:
-                    return None
                 cur.execute(_ISSUER_BASIC_INFO_SQL, params)
                 row = cur.fetchone()
         else:
