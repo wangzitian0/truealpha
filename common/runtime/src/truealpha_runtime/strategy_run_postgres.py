@@ -80,17 +80,7 @@ LATEST_RUN_SQL = """
 """
 
 
-def _decisions_sql(convention: str) -> str:
-    """Build the `strategy_decisions` query, joining PEG metric laterals only for conventions that read them."""
-    peg_selects: list[str] = []
-    peg_joins: list[str] = []
-    if convention == "consensus":
-        peg_selects.append(
-            " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
-            " peg_c.reason_codes as peg_consensus_reason_codes,"
-        )
-        peg_joins.append(
-            """
+_PEG_CONSENSUS_LATERAL = """
     left join lateral (
         select mc.value, mc.reason_codes
         from mart.metric_node_values mc
@@ -109,14 +99,8 @@ def _decisions_sql(convention: str) -> str:
         order by mcr.period desc, mcr.node_id
         limit 1
     ) peg_cr on true"""
-        )
-    elif convention == "geometric_cagr":
-        peg_selects.append(
-            " peg_g.value as peg_geometric_cagr, peg_gr.value as peg_geometric_cagr_rank,"
-            " peg_g.reason_codes as peg_geometric_cagr_reason_codes,"
-        )
-        peg_joins.append(
-            """
+
+_PEG_GEOMETRIC_LATERAL = """
     left join lateral (
         select mc.value, mc.reason_codes
         from mart.metric_node_values mc
@@ -135,17 +119,17 @@ def _decisions_sql(convention: str) -> str:
         order by mcr.period desc, mcr.node_id
         limit 1
     ) peg_gr on true"""
-        )
+
+
+def _decisions_from_sql(convention: str) -> str:
+    """Build the FROM/JOIN clause, omitting unused PEG laterals for `historical_cagr` and `guidance`."""
+    peg_joins: list[str] = []
+    if convention in {"all", "consensus"}:
+        peg_joins.append(_PEG_CONSENSUS_LATERAL)
+    if convention in {"all", "geometric_cagr"}:
+        peg_joins.append(_PEG_GEOMETRIC_LATERAL)
     return (
-        "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
-        " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
-        " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
-        " d.eligible, d.outcome, d.exclusion_reason, d.availability_status,"
-        " d.source_evidence_status, d.peg_reason_codes,"
-        " d.rank, d.target_weight, d.peg, d.peg_rank,"
-        + "".join(peg_selects)
-        + " d.labor_efficiency_metric, m.confidence "
-        + """
+        """
     from mart.strategy_decisions d
     left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
     left join lateral (
@@ -165,6 +149,35 @@ def _decisions_sql(convention: str) -> str:
     where d.strategy_run_id = %s
     order by d.cutoff_at, coalesce(ei.legacy_id, d.issuer_id)
 """
+    )
+
+
+DECISIONS_FROM_SQL = _decisions_from_sql("all")
+
+
+def _decisions_sql(convention: str) -> str:
+    """Build the `strategy_decisions` query, joining PEG metric laterals only for conventions that read them."""
+    peg_selects: list[str] = []
+    if convention in {"all", "consensus"}:
+        peg_selects.append(
+            " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
+            " peg_c.reason_codes as peg_consensus_reason_codes,"
+        )
+    if convention in {"all", "geometric_cagr"}:
+        peg_selects.append(
+            " peg_g.value as peg_geometric_cagr, peg_gr.value as peg_geometric_cagr_rank,"
+            " peg_g.reason_codes as peg_geometric_cagr_reason_codes,"
+        )
+    return (
+        "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
+        " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
+        " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
+        " d.eligible, d.outcome, d.exclusion_reason, d.availability_status,"
+        " d.source_evidence_status, d.peg_reason_codes,"
+        " d.rank, d.target_weight, d.peg, d.peg_rank,"
+        + "".join(peg_selects)
+        + " d.labor_efficiency_metric, m.confidence "
+        + _decisions_from_sql(convention)
     )
 
 
