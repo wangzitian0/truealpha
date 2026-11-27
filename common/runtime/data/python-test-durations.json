@@ -86,7 +86,6 @@
   "common/runtime/tests/test_documents_db_contract.py": 0.09,
   "common/runtime/tests/test_entity_identity_text_index.py": 1.39,
   "common/runtime/tests/test_entity_identity_view.py": 5.75,
-  "common/runtime/tests/test_goal_criteria.py": 0.0,
   "common/runtime/tests/test_issuer_modules_mart.py": 0.18,
   "common/runtime/tests/test_migration_applier.py": 0.03,
   "common/runtime/tests/test_migration_boot_locks.py": 9.37,

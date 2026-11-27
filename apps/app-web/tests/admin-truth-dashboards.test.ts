@@ -83,34 +83,6 @@ __setApiFetch(async (input) => {
               { check_name: "topt_baseline", ok: true, freshness_state: "stale", age_hours: 72.0, max_age_hours: 48.0, ran_at: "2026-11-22T01:00:00Z", summary: "overdue check", dagster_run_id: "dag-0" },
               { check_name: "model_key_health", ok: null, freshness_state: "missing", age_hours: null, max_age_hours: 48.0, ran_at: null, summary: "missing from mart.nightly_verdicts", dagster_run_id: null },
             ],
-            construction_progress: {
-              environment: "staging",
-              criteria_total: 30,
-              criteria_verified: 6,
-              criteria_partial: 14,
-              criteria_pending: 8,
-              criteria_failed_or_stale: 2,
-              criteria: [],
-              universes: [
-                {
-                  universe_key: "topt",
-                  universe_id: "universe:topt-us-v1",
-                  scheduled: true,
-                  freshness: "fresh",
-                  availability: "available",
-                  report_matches_head: true,
-                  questions: [
-                    { question_id: "q1", answered: 8, denominator: 10, actionable_denominator: 9, actionable_coverage_pct: 88.89, world_absence: 1, pipeline_gap: 1, not_applicable: 0 },
-                  ],
-                },
-              ],
-              strategy_runs: [
-                { strategy_key: "large_model_value_v0", strategy_run_id: "strategy-run:" + "c".repeat(64), executed_at: "2026-11-25T02:00:00Z", selected_count: 3, eligible_count: 5, total_count: 10 },
-              ],
-              backtest_runs: [
-                { strategy_key: "large_model_value_v0", universe_id: "universe:topt-us-v1", status: "succeeded", run_id: BT_RUN, executed_at: "2026-11-25T03:00:00Z", cagr_monthly: "0.12", sharpe_daily: "1.1" },
-              ],
-            },
             failed_job_errors: [{ run_id: "dag-err-1", logged_at: "2026-11-25T00:30:00Z", first_line_error: "Upstream timeout 504" }],
             runs: [{ run_id: "dag-1", job_name: "topt_live_pipeline", status: "SUCCESS", created_at: "2026-11-25T00:00:00Z", duration_seconds: 90 }],
             trigger_queue: [{ request_id: 11, job_name: "sp500_live_pipeline", force_fetch: true, requested_at: "2026-11-25T00:10:00Z", consumed_at: null, launched_run_key: null }],
@@ -162,10 +134,9 @@ __setApiFetch(async (input) => {
               { artifact_key: "topt_gppe", lane: "capture", schedule_name: "topt_daily", universe_like: "universe:topt-%", family: "daily_capture", served_to: "/research/rankings", wired: true },
             ],
             output_invariants: [
-              { invariant_id: "selected-weights-close", kind: "hard", population: 20, violation_count: 0, deferred: false, sample_rows: [], checked_at: "2026-11-25T01:00:00Z" },
+              { invariant_id: "selected-weights-close", kind: "critical", population: 20, violation_count: 0, deferred: false, sample_rows: [], checked_at: "2026-11-25T01:00:00Z" },
             ],
             validation: [{ check: "plausibility sign checks", verdict: "pass", detail: "0 implausible cells" }],
-            nightly_verdicts: [{ check_name: "output_invariants", ok: true, ran_at: "2026-11-25T01:00:00Z", summary: "ok", dagster_run_id: "dag-1" }],
             confidence: [
               {
                 universe_id: "universe:topt-us-v1",
@@ -194,8 +165,6 @@ __setApiFetch(async (input) => {
             recent_calls: [{ id: 1, called_at: "2026-11-25 00:00:00Z", source: "sec", endpoint: "/api/xbrl", caller: "capture", ok: true, status_code: 200, duration_ms: 110, run_key: "rk-1", error: null }],
             ledger_coverage: [{ day: "2026-11-25", source: "sec", endpoint: "/api/xbrl", calls: 40, no_key: 0, by_reason: {}, keys_twice: 0, run_share: "1.0000", calls_per_run: "40.0" }],
             backfill_health: [{ id: 1, source: "sec", metric: "backfill_lag_hours", value: "0", logged_at: "2026-11-25T00:00:00Z", note: "healthy" }],
-            trigger_queue: [{ request_id: 11, job_name: "qqq_live_pipeline", force_fetch: false, requested_at: "2026-11-25T00:10:00Z", consumed_at: "2026-11-25T00:10:25Z", launched_run_key: "manual:d1", requested_by: "principal:admin" }],
-            rollback_requests: [{ request_id: 3, universe_id: "universe:topt-us-v1", target_run_id: RUN_ID, reason: "revert spike", requested_at: "2026-11-25T00:20:00Z", consumed_at: null, result_pointer_id: null }],
             db_hygiene: {
               stats_reset: "2026-11-25T00:00:00Z",
               zero_scan_indexes: [{ schemaname: "mart", table_name: "demo_tbl", index_name: "idx_demo_unused", size_bytes: 16384 }],
@@ -508,7 +477,7 @@ try {
     "topt_gppe",
     "Output invariants &amp; validation",
     "selected-weights-close",
-    "critical (fact)",
+    "critical",
     "Capacity, Vendor Quotas &amp; 429/1302",
     "20.00%",
     "LLM usage &amp; model drift",

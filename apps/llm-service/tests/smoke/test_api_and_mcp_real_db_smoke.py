@@ -85,10 +85,11 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
                 "llm_usage",
                 "backfill_health",
                 "capacity",
-                "vendor_accounts",
                 "model_1302_by_day",
             ):
                 assert key in datahub_data
+            for moved_key in ("vendor_accounts", "nightly_verdicts", "trigger_queue", "rollback_requests"):
+                assert moved_key not in datahub_data
 
             trigger_resp = client.post("/api/v1/admin/triggers", json={"universe": "qqq", "force_fetch": False})
             assert trigger_resp.status_code == 202, trigger_resp.text

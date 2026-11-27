@@ -5,7 +5,6 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack, nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -14,7 +13,6 @@ from llm_service import main
 from llm_service.main import ROUTED_PREFIX, app
 from pydantic import SecretStr
 from truealpha_runtime.testing import clone_test_database, db_writes_allowed, isolated_test_database
-from truealpha_tools import vision_audit as audit
 
 pytestmark = pytest.mark.smoke
 
@@ -429,17 +427,15 @@ def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monke
     ]
 
 
-def test_the_vision_audit_reads_the_new_entries(monkeypatch) -> None:
-    """`truealpha_tools.vision_audit` reads `governed_pointers` from this answer. It must parse the
-    richer entries and fail on a stale or withheld scheduled head."""
+def test_governed_pointers_report_freshness_and_availability(monkeypatch) -> None:
+    """Verify `/health` reports per-universe `governed_pointers` freshness and availability."""
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
     pointers = TestClient(app).get("/health").json()["governed_pointers"]
-    assert [entry["universe_id"] for entry in pointers] == [row[0] for row in SERVED_ROWS]
-    fresh, detail = audit._assess_served_head_freshness(SimpleNamespace(governed_pointers=pointers))
-    assert fresh is False
-    assert "universe:canary-us-2026-06-30:stale/unavailable" in detail
-    assert "universe:qqq-us-2026-06-30:stale/available" in detail
-    assert "universe:topt-us-2026-03-31" not in detail
+    assert [(entry["universe_id"], entry["freshness"], entry["availability"]) for entry in pointers] == [
+        ("universe:canary-us-2026-06-30", "stale", "unavailable"),
+        ("universe:qqq-us-2026-06-30", "stale", "available"),
+        ("universe:topt-us-2026-03-31", "fresh", "available"),
+    ]
 
 
 def test_a_head_list_never_runs_the_environments_read(monkeypatch) -> None:
@@ -469,14 +465,10 @@ def test_an_unreadable_environments_view_reports_unknown_not_an_empty_list(monke
     assert TestClient(app).get("/health").json()["governed_pointers"] == "unknown"
 
 
-def test_the_vision_audit_fails_closed_on_unknown_pointers(monkeypatch) -> None:
-    """The marker "unknown" fails the reader that consumes it, with a clear text."""
+def test_unknown_governed_pointers_fails_closed_when_environments_exist(monkeypatch) -> None:
+    """The marker `"unknown"` preserves fail-closed signal when heads exist in other environments."""
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly([], environments=[(1,)]))
-    pointers = TestClient(app).get("/health").json()["governed_pointers"]
-    assert audit._assess_served_head_freshness(SimpleNamespace(governed_pointers=pointers)) == (
-        False,
-        "mart.served_head.freshness=unknown (no governed pointers)",
-    )
+    assert TestClient(app).get("/health").json()["governed_pointers"] == "unknown"
 
 
 #: The real `psycopg.connect`, kept before any test replaces it. The patch of `health_of` calls it.
@@ -626,16 +618,11 @@ QQQ_ROLL = (
 
 def test_a_universe_roll_lists_one_qqq_pointer_and_the_freshness_check_passes(monkeypatch, clone) -> None:
     """#1320: the retired QQQ head made the Production freshness check fail every day from
-    2026-10-09. The endpoint lists the live version only. The vision audit reads this answer."""
+    2026-10-09. The endpoint lists the live version only."""
     payload = health_of(monkeypatch, clone(QQQ_ROLL))
     assert [(entry["universe_id"], entry["freshness"]) for entry in payload["governed_pointers"]] == [
         ("universe:qqq-us-2026-09-30", "fresh")
     ]
-    report = SimpleNamespace(governed_pointers=payload["governed_pointers"])
-    assert audit._assess_served_head_freshness(report, environment="production") == (
-        True,
-        "mart.served_head.freshness == 'fresh'",
-    )
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
