@@ -33,14 +33,14 @@ nothing).
 
 ## Decision 2 — the admission requirements (superseded by ADR A8 as PR-blocking gate)
 
-> Superseded as a manual PR-blocking checklist by [ADR A8](A8-strong-dashboards-weak-gates.md) (`Q10`): source onboarding is enforced by CI smoke/contract suites (`vendor_contract_smoke.py`) and observed on `/admin/datahub`, not manual PR checklists.
+> Superseded as a manual PR-blocking checklist by [ADR A8](A8-strong-dashboards-weak-gates.md) (`Q10`): source onboarding is enforced by CI smoke/contract suites and observed on `/admin/datahub`, not manual PR checklists.
 
 A PR that adds or materially changes a source must provide:
 
 1. an adapter behind the existing `SourceFetchPort` — the executor never learns vendors;
 2. a **cassette from the first real capture**, sha-anchored to `raw.fetches` (#569's pattern:
    the fixture IS reality, provably);
-3. one named entry in `apps/data-engine/scripts/vendor_contract_smoke.py` per load-bearing vendor assumption;
+3. contract test coverage per load-bearing vendor assumption;
 4. a throttle/shared-budget declaration — requests per window, and the consumption window when
    the credential is shared across environments (#574's collision class);
 5. an origin-registry entry for every parser vintage it introduces (#543's class).

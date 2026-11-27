@@ -109,10 +109,10 @@ def _raise_leaky(*args, **kwargs):
     raise LeakyError
 
 
-def test_database_check_redacts_dsn_and_password_when_the_probe_itself_raises(
+def test_database_check_redacts_dsn_and_password_on_leaky_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(checks_module, "probe_postgres", _raise_leaky)
+    monkeypatch.setattr(psycopg, "connect", _raise_leaky)
 
     result = DatabaseCheck(_leaky_settings()).probe()
 
@@ -121,17 +121,6 @@ def test_database_check_redacts_dsn_and_password_when_the_probe_itself_raises(
     assert LEAKED_PASSWORD not in result.detail
     assert LEAKED_DSN not in result.detail
     assert "postgresql://[REDACTED]" in result.detail
-
-
-def test_database_check_reports_only_the_error_type_when_settings_construction_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(checks_module, "PostgresSettings", _raise_leaky)
-
-    result = DatabaseCheck(_leaky_settings()).probe()
-
-    assert result.status is DependencyStatus.ABSENT
-    assert result.detail == "LeakyError"
 
 
 def test_graph_store_check_redacts_dsn_and_password_on_connection_failure(

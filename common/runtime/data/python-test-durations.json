@@ -40,7 +40,6 @@
   "apps/data-engine/tests/test_telemetry.py": 9.69,
   "apps/data-engine/tests/test_topt_baseline.py": 0.0,
   "apps/data-engine/tests/test_vendor_account_gate.py": 0.0,
-  "apps/data-engine/tests/test_vendor_contract_smoke.py": 0.01,
   "apps/data-engine/tests/test_wave3_stock_confidence.py": 0.0,
   "apps/data-engine/tests/test_wave4_consolidation_and_triggers.py": 0.0,
   "apps/llm-service/tests/domains/test_auth_domain.py": 0.12,

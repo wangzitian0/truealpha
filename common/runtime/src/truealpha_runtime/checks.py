@@ -11,14 +11,10 @@ from truealpha_runtime.config import RuntimeSettings
 from truealpha_runtime.storage import S3RawObjectStore
 
 
-def _pg_settings(database_url: str, connect_timeout_seconds: int = 5) -> PostgresSettings:
-    return PostgresSettings(url=database_url, connect_timeout_seconds=connect_timeout_seconds)
-
-
 def redact_postgres_exception(exc: Exception, *, database_url: str, connect_timeout_seconds: int = 5) -> str:
     """Scrub credentials from a PostgreSQL exception using SDK settings."""
     try:
-        postgres_settings = _pg_settings(database_url, connect_timeout_seconds)
+        postgres_settings = PostgresSettings(url=database_url, connect_timeout_seconds=connect_timeout_seconds)
     except Exception:  # noqa: BLE001
         return type(exc).__name__
     return redact_postgres_error(exc, postgres_settings.url)
@@ -44,18 +40,10 @@ class DatabaseCheck:
         self.settings = settings
 
     def probe(self) -> ProbeResult:
-        def _check() -> ProbeResult:
-            pg = _pg_settings(self.settings.database_url, self.settings.database_connect_timeout_seconds)
-            return probe_postgres(pg.url, connect_timeout=pg.connect_timeout_seconds, name=self.name)
-
-        return _run_probe(
-            self.name,
-            _check,
-            lambda exc: redact_postgres_exception(
-                exc,
-                database_url=self.settings.database_url,
-                connect_timeout_seconds=self.settings.database_connect_timeout_seconds,
-            ),
+        return probe_postgres(
+            self.settings.database_url,
+            connect_timeout=self.settings.database_connect_timeout_seconds,
+            name=self.name,
         )
 
 

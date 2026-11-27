@@ -127,11 +127,9 @@ jobs:
               - '.github/actions/**'
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-required.yml'
-            # Positive build-input paths without `!` entries (#1412, #1647): docs and test edits
-            # do not trigger container image builds on PRs.
+            # Positive build-infrastructure inputs without `!` entries (#1412, #1647): app source,
+            # migrations, docs, and test edits do not trigger container image builds on PRs.
             image_app_web:
-              - 'apps/app-web/src/**'
-              - 'apps/app-web/public/**'
               - 'apps/app-web/Dockerfile*'
               - 'apps/app-web/.dockerignore'
               - 'apps/app-web/package.json'
@@ -145,18 +143,13 @@ jobs:
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_llm_service:
-              - 'apps/llm-service/src/**'
               - 'apps/llm-service/pyproject.toml'
               - 'apps/llm-service/Dockerfile*'
               - 'apps/llm-service/required-env.generated.json'
               - 'apps/data-engine/pyproject.toml'
-              - 'common/contracts/src/**'
               - 'common/contracts/pyproject.toml'
-              - 'common/factors/src/**'
               - 'common/factors/pyproject.toml'
-              - 'common/runtime/src/**'
               - 'common/runtime/pyproject.toml'
-              - 'db/migrations/**'
               - 'db/roles.sql'
               - 'db/apply_migrations.sh'
               - 'pyproject.toml'
@@ -164,20 +157,15 @@ jobs:
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_data_engine:
-              - 'apps/data-engine/src/**'
               - 'apps/data-engine/pyproject.toml'
               - 'apps/data-engine/Dockerfile*'
               - 'apps/data-engine/dagster.yaml'
               - 'apps/data-engine/dagster-entrypoint.sh'
               - 'apps/data-engine/required-env.generated.json'
               - 'apps/llm-service/pyproject.toml'
-              - 'common/contracts/src/**'
               - 'common/contracts/pyproject.toml'
-              - 'common/factors/src/**'
               - 'common/factors/pyproject.toml'
-              - 'common/runtime/src/**'
               - 'common/runtime/pyproject.toml'
-              - 'db/migrations/**'
               - 'db/roles.sql'
               - 'db/apply_migrations.sh'
               - 'pyproject.toml'
@@ -237,9 +225,11 @@ jobs:
     needs: changes
     permissions:
       contents: read
+      packages: write
     uses: ./.github/workflows/release-images.yml
     with:
       publish: false
+      publish_candidate: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_images) }}
       app_web: ${{ github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
       llm_service: ${{ github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
       data_engine: ${{ github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
@@ -268,7 +258,7 @@ jobs:
       app_web: true
       llm_service: true
       data_engine: true
-      prebuilt: ${{ github.event_name == 'push' }}
+      prebuilt: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_images) }}
 
   # A release tag reuses the main image of its commit; it builds nothing (#1878).
   images_promote:
