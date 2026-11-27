@@ -42,13 +42,12 @@ log = logging.getLogger(__name__)
 _INSERT_SQL = (
     "insert into mart.issuer_analyst_ratings ("
     "run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, "
-    "confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status"
-    ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do update set "
+    "confidence, reason_codes, extractor, availability_status, source_evidence_status"
+    ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do update set "
     "cutoff = excluded.cutoff, consensus_rating = excluded.consensus_rating, analysts_count = excluded.analysts_count, "
     "buy_count = excluded.buy_count, hold_count = excluded.hold_count, sell_count = excluded.sell_count, "
     "confidence = excluded.confidence, reason_codes = excluded.reason_codes, extractor = excluded.extractor, "
-    "availability_status = excluded.availability_status, source_evidence_status = excluded.source_evidence_status, "
-    "factor_validation_status = excluded.factor_validation_status "
+    "availability_status = excluded.availability_status, source_evidence_status = excluded.source_evidence_status "
     "where not (mart.issuer_analyst_ratings.availability_status = 'available' "
     "and excluded.availability_status <> 'available' "
     "and exists (select 1 from unnest(excluded.reason_codes) as code where starts_with(code, 'fetch_error:')))"
@@ -57,14 +56,14 @@ _INSERT_SQL = (
 _INSERT_WITH_TARGETS_SQL = (
     "insert into mart.issuer_analyst_ratings ("
     "run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, "
-    "confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status, "
+    "confidence, reason_codes, extractor, availability_status, source_evidence_status, "
     "target_price, target_high, target_low, track_record_score"
-    ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do update set "
+    ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do update set "
     "cutoff = excluded.cutoff, consensus_rating = excluded.consensus_rating, analysts_count = excluded.analysts_count, "
     "buy_count = excluded.buy_count, hold_count = excluded.hold_count, sell_count = excluded.sell_count, "
     "confidence = excluded.confidence, reason_codes = excluded.reason_codes, extractor = excluded.extractor, "
     "availability_status = excluded.availability_status, source_evidence_status = excluded.source_evidence_status, "
-    "factor_validation_status = excluded.factor_validation_status, target_price = excluded.target_price, "
+    "target_price = excluded.target_price, "
     "target_high = excluded.target_high, target_low = excluded.target_low, "
     "track_record_score = excluded.track_record_score "
     "where not (mart.issuer_analyst_ratings.availability_status = 'available' "
@@ -568,7 +567,7 @@ def materialize_analyst_ratings(
     cutoff: datetime | None = None,
     ratings_data: Sequence[dict[str, Any] | AnalystTrackRecord],
 ) -> int:
-    as_of, source_status, val_status = unbacked_status_values(cutoff)
+    as_of, source_status = unbacked_status_values(cutoff)
     store_targets = has_column(connection, "mart", "issuer_analyst_ratings", "target_price")
     for item in ratings_data:
         rating_items: Sequence[AnalystRatingItem] = ()
@@ -624,12 +623,12 @@ def materialize_analyst_ratings(
         if store_targets:
             connection.execute(
                 _INSERT_WITH_TARGETS_SQL,
-                (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, val_status, *extra),
+                (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, *extra),
             )
         else:
             connection.execute(
                 _INSERT_SQL,
-                (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, val_status),
+                (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status),
             )
     return len(ratings_data)
 

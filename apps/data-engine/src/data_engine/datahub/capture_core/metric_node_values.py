@@ -39,26 +39,25 @@ from factors.snapshot_inputs import (
 )
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.execution import FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import InputEvidenceStatus
 
 from data_engine.datahub._helpers import parse_decimal
 from data_engine.datahub.capture_core.status_dimensions import (
     availability_status_for,
     contract_not_applicable_issuer_ids,
-    factor_validation_status_for,
 )
 
 _INSERT_NODE_VALUE_SQL = """
     insert into mart.metric_node_values (
         run_id, issuer_id, node_id, node_key, period, period_tag,
         value, unit, availability_status, reason_codes,
-        source_evidence_status, factor_validation_status,
+        source_evidence_status,
         confidence, tree_id, tree_version, tree_sha256,
         input_observation_ids
     ) values (
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s,
-        %s, %s,
+        %s,
         %s, %s, %s, %s,
         %s
     )
@@ -255,7 +254,6 @@ def _insert_metric_node_value(
     confidence: Decimal,
     reason_codes: list[str],
     source_evidence: InputEvidenceStatus,
-    validation_status: FactorValidationStatus,
     tree_id: Any,
     tree_version: str,
     tree_sha256: str,
@@ -283,7 +281,6 @@ def _insert_metric_node_value(
             avail_status.value,
             reason_codes,
             source_evidence.value,
-            validation_status.value,
             confidence,
             tree_id,
             tree_version,
@@ -323,7 +320,6 @@ def _materialize_panel_leaves(
     freshness: MetricFreshness,
     base_confidence: Decimal,
     source_evidence: InputEvidenceStatus,
-    validation_status: FactorValidationStatus,
     not_applicable: bool = False,
 ) -> int:
     """Materialize wide-panel leaf nodes and derived market_cap alongside composite variant trees."""
@@ -363,7 +359,6 @@ def _materialize_panel_leaves(
             confidence=effective_conf if avail == "available" else Decimal("0"),
             reason_codes=reasons,
             source_evidence=source_evidence,
-            validation_status=validation_status,
             tree_id=leaf_tree_id,
             tree_version="v1",
             tree_sha256=leaf_tree_sha,
@@ -399,7 +394,6 @@ def _materialize_panel_leaves(
             confidence=mkt_conf,
             reason_codes=mkt_reasons,
             source_evidence=source_evidence,
-            validation_status=validation_status,
             tree_id=leaf_tree_id,
             tree_version="v1",
             tree_sha256=leaf_tree_sha,
@@ -440,9 +434,6 @@ def materialize_metric_node_values(
         for listing_id, payloads in load_financial_payloads_by_listing(connection, all_obs_ids).items()
         if payloads
     }
-    validation_status: FactorValidationStatus = factor_validation_status_for(
-        (gppe_definition.definition_id, tier_definition_id)
-    )
     variant_hashes = {(v.key, v.version): variant_sha256(v, metrics=metrics) for v in variants}
     inserted_count = 0
     for factor_input in factor_inputs:
@@ -465,7 +456,6 @@ def materialize_metric_node_values(
                 freshness=freshness,
                 base_confidence=base_confidence,
                 source_evidence=source_evidence,
-                validation_status=validation_status,
                 not_applicable=factor_input.issuer_id in resolved_not_applicable,
             )
         for variant in variants:
@@ -484,7 +474,6 @@ def materialize_metric_node_values(
                 freshness=freshness,
                 base_confidence=base_confidence,
                 source_evidence=source_evidence,
-                validation_status=validation_status,
                 not_applicable=factor_input.issuer_id in resolved_not_applicable,
             )
 
@@ -496,7 +485,6 @@ def materialize_metric_node_values(
             periods_by_listing=periods_by_listing,
             evidence_by_listing=evidence_by_listing,
             financial_by_listing=financial_by_listing,
-            validation_status=validation_status,
             metrics=metrics,
             extra_expressions=extra_expressions,
         )
@@ -511,7 +499,6 @@ def _materialize_extra_expressions(
     periods_by_listing: Mapping[str, tuple[date | None, date | None, date | None]],
     evidence_by_listing: Mapping[str, InputEvidenceStatus],
     financial_by_listing: Mapping[str, Mapping[str, Any]],
-    validation_status: FactorValidationStatus,
     metrics: Mapping[str, PanelMetricSpec],
     extra_expressions: Mapping[str, pl.Expr],
 ) -> int:
@@ -595,7 +582,6 @@ def _materialize_extra_expressions(
                 confidence=node_conf,
                 reason_codes=node_reasons,
                 source_evidence=source_evidence,
-                validation_status=validation_status,
                 tree_id=tree_id_for(name, "v1"),
                 tree_version="v1",
                 tree_sha256=canonical_sha256({"key": name, "expr": expr.meta.serialize(format="json")}),
@@ -617,7 +603,6 @@ def _materialize_issuer_tree(
     freshness: MetricFreshness,
     base_confidence: Decimal,
     source_evidence: InputEvidenceStatus,
-    validation_status: FactorValidationStatus,
     metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
     not_applicable: bool = False,
 ) -> int:
@@ -647,7 +632,6 @@ def _materialize_issuer_tree(
             confidence=confidence,
             reason_codes=reason_codes,
             source_evidence=source_evidence,
-            validation_status=validation_status,
             tree_id=tree.tree_id,
             tree_version=tree.version,
             tree_sha256=tree_sha256,

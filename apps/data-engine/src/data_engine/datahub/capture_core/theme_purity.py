@@ -11,7 +11,7 @@ from typing import Any
 from factors.base.theme_purity import ThemePurity, ThemeSegment, theme_purity
 from factors.shared.extraction import GROSS_PARTITION_RULES, RULE_MODEL_NO_ANSWER, RULE_NO_DESCRIPTION
 from psycopg import Connection
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import AvailabilityStatus, InputEvidenceStatus
 
 from data_engine.contracts.standards import STANDARDS
 from data_engine.contracts.theme_purity import THEMES, ThemeDefinition
@@ -66,8 +66,8 @@ insert into mart.issuer_theme_purity
     (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, cutoff,
      period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue,
      out_of_theme_revenue, unclassified_revenue, partition_residual, segments, confidence,
-     reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     reason_codes, extractor, availability_status, source_evidence_status)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 on conflict (run_id, issuer_id, theme_id) do update set
     cik = excluded.cik,
     theme = excluded.theme,
@@ -87,8 +87,7 @@ on conflict (run_id, issuer_id, theme_id) do update set
     reason_codes = excluded.reason_codes,
     extractor = excluded.extractor,
     availability_status = excluded.availability_status,
-    source_evidence_status = excluded.source_evidence_status,
-    factor_validation_status = excluded.factor_validation_status
+    source_evidence_status = excluded.source_evidence_status
 """
 
 
@@ -179,7 +178,7 @@ def _accession_of(evidence_ref: str) -> str:
 
 def _status_dimensions(
     purity: ThemePurity, _definition: ThemeDefinition
-) -> tuple[AvailabilityStatus, InputEvidenceStatus, FactorValidationStatus]:
+) -> tuple[AvailabilityStatus, InputEvidenceStatus]:
     return coverage_status_dimensions(
         value_present=purity.result.value is not None,
         confidence=purity.result.confidence,
@@ -371,7 +370,7 @@ def materialize_theme_purity(
         if checkpoint is not None:
             checkpoint()
     for partition, definition, subject_id, purity, extractor in computed:
-        availability, evidence, validation = _status_dimensions(purity, definition)
+        availability, evidence = _status_dimensions(purity, definition)
         connection.execute(
             _INSERT_SQL,
             (
@@ -397,7 +396,6 @@ def materialize_theme_purity(
                 extractor,
                 availability.value,
                 evidence.value,
-                validation.value,
             ),
         )
     return tuple(purity for *_, purity, _extractor in computed)

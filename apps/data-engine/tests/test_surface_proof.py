@@ -632,10 +632,10 @@ def _seed_theme_row(connection, *, run_id: str, cutoff: datetime) -> None:
             (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, cutoff,
              period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue,
              out_of_theme_revenue, unclassified_revenue, partition_residual, segments, confidence,
-             extractor, availability_status, source_evidence_status, factor_validation_status)
+             extractor, availability_status, source_evidence_status)
         values (%s, 'issuer:themes-910-test', %s, 'ai-compute', 'AI compute', 'v1', %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                'rule:themes-910-test', 'available', 'verified', 'accepted')
+                'rule:themes-910-test', 'available', 'verified')
         """,
         (
             run_id,
@@ -713,8 +713,8 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
             """
             insert into mart.issuer_theme_purity (
                 run_id, issuer_id, cutoff, reason_codes, theme_id, theme, definition_version, definition_sha256,
-                segments, confidence, extractor, availability_status, source_evidence_status, factor_validation_status
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+                segments, confidence, extractor, availability_status, source_evidence_status
+            ) values (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 'lane:unvisited:v1', 'unavailable', 'degraded')
             """,
             (
                 run_id,

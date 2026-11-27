@@ -103,14 +103,9 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
                 <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.confidence))}</td>
                 <td className={c}>
                   <AvailabilityBadge status={row.availability ?? "unavailable"} />
-                  {(row.source_evidence_status || (row.factor_validation_status && row.factor_validation_status !== "not_evaluated")) && (
+                  {row.source_evidence_status && (
                     <div className="mt-1 font-mono text-[10px] text-gray-500">
-                      {[
-                        row.source_evidence_status,
-                        row.factor_validation_status !== "not_evaluated" ? row.factor_validation_status : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" / ")}
+                      {row.source_evidence_status}
                     </div>
                   )}
                 </td>

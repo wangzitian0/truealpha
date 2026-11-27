@@ -1,4 +1,4 @@
-"""Deterministic card builder, HTML renderer, and prompt/HTML verifier (#372, #44)."""
+"""Deterministic card builder and prompt verifier (#372, #44)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from truealpha_contracts.common import (
     load_data_json,
     require_aware,
 )
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
+from truealpha_contracts.execution import AvailabilityStatus
 
 from truealpha_runtime.research_report import ReportSection, ReportSectionKind, ResearchReport, ResultValue
 
@@ -47,81 +47,7 @@ class ClaimClass(StrEnum):
     NOT_APPLICABLE = "not_applicable"
 
 
-class CardPreset(StrictFrozenModel):
-    preset_id: str = _NE
-    style: str = _NE
-    layout: str = _NE
-    palette: str = _NE
-    bg_css: str = _NE
-    surface_bg: str = _NE
-    fg: str = _NE
-    mute: str = _NE
-    accent: str = _NE
-    border: str = _NE
-    chip_bg: str = _NE
-
-
-def _hex_rgb(color: str) -> tuple[float, float, float]:
-    raw = color.strip().lstrip("#")
-    if len(raw) == 3:
-        raw = "".join(ch * 2 for ch in raw)
-    if len(raw) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in raw):
-        raise ValueError(f"expected #RGB or #RRGGBB hex color, got {color!r}")
-    return (int(raw[0:2], 16) / 255.0, int(raw[2:4], 16) / 255.0, int(raw[4:6], 16) / 255.0)
-
-
-def _relative_luminance(color: str) -> float:
-    r, g, b = (c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in _hex_rgb(color))
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def contrast_ratio(hex_a: str, hex_b: str) -> float:
-    """Return WCAG 2.1 contrast ratio (`1.0`..`21.0`) between two hex colors."""
-    la, lb = _relative_luminance(hex_a), _relative_luminance(hex_b)
-    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
-
-
-_ON_ACCENT_CANDIDATES: Final[tuple[str, str]] = ("#FFFFFF", "#111111")
-
-
-def on_accent_color(preset: CardPreset) -> str:
-    """Return the candidate text color with the higher contrast over `accent`."""
-    return max(_ON_ACCENT_CANDIDATES, key=lambda c: contrast_ratio(c, preset.accent))
-
-
-def verify_preset_contrast(preset: CardPreset) -> tuple[bool, tuple[str, ...]]:
-    """Enforce WCAG AA minimums on each text and background pair that the card CSS template uses."""
-    pairs = (
-        ("fg", preset.fg, preset.surface_bg, 4.5),
-        ("mute", preset.mute, preset.surface_bg, 3.0),
-        ("fg_on_chip", preset.fg, preset.chip_bg, 4.5),
-        ("mute_on_chip", preset.mute, preset.chip_bg, 3.0),
-        ("on_accent", on_accent_color(preset), preset.accent, 4.5),
-    )
-    violations = [
-        f"low_{name}_contrast:{preset.preset_id}:{ratio:.2f}"
-        for name, text, background, minimum in pairs
-        if (ratio := contrast_ratio(text, background)) < minimum
-    ]
-    return (not violations, tuple(violations))
-
-
-CARD_PRESETS: Final[dict[str, CardPreset]] = {
-    r[0]: CardPreset(
-        preset_id=r[0],
-        style=r[0],
-        layout=r[1],
-        palette=r[2],
-        bg_css=r[3],
-        surface_bg=r[4],
-        fg=r[5],
-        mute=r[6],
-        accent=r[7],
-        border=r[8],
-        chip_bg=r[9],
-    )
-    for r in _DATA["presets"]
-}
+_PRESET_IDS: Final[tuple[str, ...]] = tuple(r[0] for r in _DATA["presets"])
 
 
 class StrategyContext(StrictFrozenModel):
@@ -193,11 +119,8 @@ class ResearchCard(StrictFrozenModel):
         return self
 
 
-_H = _DATA["html"]
 _CARD_SECTIONS = {CardKind(k): tuple(ReportSectionKind(s) for s in v) for k, v in _DATA["sections"].items()}
 _RISK_NOTE = {CardKind(k): v for k, v in _DATA["risk_note"].items()}
-_DEFAULT_PRESET = {CardKind(k): v for k, v in _DATA["default_preset_by_kind"].items()}
-_CARD_KIND_ZH = {CardKind(k): v for k, v in _DATA["card_kind_zh"].items()}
 _AVAIL_RANK = {
     AvailabilityStatus.ERROR: 0,
     AvailabilityStatus.UNAVAILABLE: 1,
@@ -207,38 +130,17 @@ _AVAIL_RANK = {
     AvailabilityStatus.AVAILABLE: 5,
     AvailabilityStatus.NOT_APPLICABLE: 6,
 }
-_CLAIM_BY_VAL = {
-    FactorValidationStatus.ACCEPTED: ClaimClass.EMPIRICALLY_VALIDATED,
-    FactorValidationStatus.REJECTED: ClaimClass.REJECTED_DO_NOT_USE,
-    FactorValidationStatus.NOT_EVALUATED: ClaimClass.RESEARCH_HYPOTHESIS,
-}
-
-
-def _claim_class(vs: FactorValidationStatus | None) -> ClaimClass:
-    return _CLAIM_BY_VAL.get(vs, ClaimClass.NOT_APPLICABLE) if vs else ClaimClass.NOT_APPLICABLE
 
 
 def _section_status(
     sections: tuple[ReportSection, ...], wanted: tuple[ReportSectionKind, ...]
-) -> tuple[AvailabilityStatus, FactorValidationStatus | None]:
+) -> tuple[AvailabilityStatus, ClaimClass]:
     matched = [s for s in sections if s.section_kind in wanted]
     if not matched:
-        return AvailabilityStatus.UNAVAILABLE, None
+        return AvailabilityStatus.UNAVAILABLE, ClaimClass.NOT_APPLICABLE
     avail = min(matched, key=lambda s: _AVAIL_RANK[s.availability]).availability
-    st = [s.validation_status for s in matched if s.validation_status is not None]
-    val = next(
-        (
-            v
-            for v in (
-                FactorValidationStatus.REJECTED,
-                FactorValidationStatus.NOT_EVALUATED,
-                FactorValidationStatus.ACCEPTED,
-            )
-            if v in st
-        ),
-        None,
-    )
-    return avail, val
+    claim = ClaimClass.NOT_APPLICABLE if avail is AvailabilityStatus.NOT_APPLICABLE else ClaimClass.RESEARCH_HYPOTHESIS
+    return avail, claim
 
 
 def build_card(report: ResearchReport, card_kind: CardKind, *, title: str | None = None) -> ResearchCard:
@@ -250,7 +152,7 @@ def build_card(report: ResearchReport, card_kind: CardKind, *, title: str | None
             display_name=sub.display_name,
             rank=sub.rank,
             availability=(st := _section_status(sub.sections, wanted))[0],
-            claim_class=_claim_class(st[1]),
+            claim_class=st[1],
             metrics=tuple(r for sec in sub.sections if sec.section_kind in wanted for r in sec.results),
             causal_claim=causal,
         )
@@ -319,7 +221,6 @@ def enrich_card_metadata(
     style_preset: str | None = None,
     series_index: int | None = None,
     series_total: int | None = None,
-    include_rendered_html: bool = False,
 ) -> ResearchCard:
     by_id, enriched = {s.subject_id: s for s in report.subjects}, []
     for sub in card.subjects:
@@ -367,7 +268,7 @@ def paginate_card_series(
         return (card,)
     chunks, pkeys = (
         [card.subjects[i : i + max_subjects_per_card] for i in range(0, len(card.subjects), max_subjects_per_card)],
-        tuple(CARD_PRESETS.keys()),
+        _PRESET_IDS,
     )
     base = card.model_dump(
         exclude={"card_id", "title", "subjects", "style_preset", "series_index", "series_total", "rendered_html"}
@@ -485,10 +386,6 @@ def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ..
     ):
         if bad:
             v.append(code)
-    preset_id = card.style_preset or _DEFAULT_PRESET.get(card.card_kind, "study-notes")
-    if (preset := CARD_PRESETS.get(preset_id)) is not None:
-        _, preset_violations = verify_preset_contrast(preset)
-        v.extend(preset_violations)
     for s in card.subjects:
         if not _has(html, s.display_name, norm) and s.subject_id not in html:
             v.append(f"missing_subject:{s.subject_id}")

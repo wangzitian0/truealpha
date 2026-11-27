@@ -2648,15 +2648,6 @@
         ],
         "title": "EntityDisplayItem"
       },
-      "FactorValidationStatus": {
-        "type": "string",
-        "enum": [
-          "accepted",
-          "rejected",
-          "not_evaluated"
-        ],
-        "title": "FactorValidationStatus"
-      },
       "FundValuationDto": {
         "properties": {
           "fund_id": {
@@ -2784,17 +2775,6 @@
               }
             ],
             "title": "Source Evidence Status"
-          },
-          "factor_validation_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Factor Validation Status"
           },
           "reason_codes": {
             "items": {
@@ -4096,17 +4076,6 @@
             ],
             "title": "Source Evidence Status"
           },
-          "factor_validation_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Factor Validation Status"
-          },
           "peg_reason_codes": {
             "items": {
               "type": "string"
@@ -4192,9 +4161,6 @@
           "source_evidence_status": {
             "$ref": "#/components/schemas/InputEvidenceStatus"
           },
-          "factor_validation_status": {
-            "$ref": "#/components/schemas/FactorValidationStatus"
-          },
           "exposure_score": {
             "anyOf": [
               {
@@ -4233,7 +4199,6 @@
           "extractor",
           "availability_status",
           "source_evidence_status",
-          "factor_validation_status",
           "exposure_score",
           "direct_partners",
           "suppliers_count",
@@ -4369,10 +4334,6 @@
             "type": "string",
             "title": "Source Evidence Status"
           },
-          "factor_validation_status": {
-            "type": "string",
-            "title": "Factor Validation Status"
-          },
           "period_end": {
             "type": "string",
             "title": "Period End"
@@ -4390,7 +4351,6 @@
           "extractor",
           "availability_status",
           "source_evidence_status",
-          "factor_validation_status",
           "period_end"
         ],
         "title": "ThemePurityRowDto"

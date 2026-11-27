@@ -14,7 +14,6 @@ _COMMON_COLS = (
     "extractor",
     "availability_status",
     "source_evidence_status",
-    "factor_validation_status",
 )
 _TABLE_SPECS = (
     (

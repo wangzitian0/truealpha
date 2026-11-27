@@ -99,7 +99,7 @@ def materialize_head_research_cards(
     transport: Transport | None = None,
 ) -> dict[str, int]:
     """Build and materialize governed Xiaohongshu 1080x1440 HTML cards (`ranking` + top `company` cards)
-    for `run_id` using `glm-5.3-flash` through `sources/llm.py` and `verify_card_html`.
+    for `run_id` using the configured model seat through `sources/llm.py` and `verify_card_html`.
     """
     db_url = database_url or settings.database_url
     repository = MartResearchReadRepository(database_url=db_url)

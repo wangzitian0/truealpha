@@ -42,7 +42,6 @@ class StrategyRunDecision(StrictFrozenModel):
     exclusion_reason: str | None = None
     availability_status: AvailabilityStatus | None = None
     source_evidence_status: str | None = None
-    factor_validation_status: str | None = None
     peg_reason_codes: tuple[str, ...] = ()
     rank: int | None = Field(default=None, ge=1)
     target_weight: Decimal | None = Field(default=None, ge=0, le=1)
@@ -58,7 +57,6 @@ class StrategyRunDecision(StrictFrozenModel):
             handler(self),
             "availability_status",
             "source_evidence_status",
-            "factor_validation_status",
         )
         if not dumped.get("peg_reason_codes"):
             dumped.pop("peg_reason_codes", None)

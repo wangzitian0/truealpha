@@ -213,9 +213,9 @@ def require_registered_input_key(input_key: str, *, verb: str = "seeding") -> No
         )
 
 
-def unbacked_status_values(cutoff: datetime | None) -> tuple[datetime, str, str]:
-    source_evidence, factor_validation = statuses_without_raw_pointer()
-    return cutoff or datetime.now(tz=UTC), source_evidence.value, factor_validation.value
+def unbacked_status_values(cutoff: datetime | None) -> tuple[datetime, str]:
+    source_evidence = statuses_without_raw_pointer()
+    return cutoff or datetime.now(tz=UTC), source_evidence.value
 
 
 def fetch_run_cutoff(connection: Any, run_id: str) -> datetime | None:

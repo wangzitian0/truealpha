@@ -384,7 +384,6 @@ def _persist_peg_consensus_nodes(
                         avail,
                         reasons,
                         src_status,
-                        "not_evaluated",
                         conf_val,
                         tree_id,
                         "v1",
@@ -398,8 +397,8 @@ def _persist_peg_consensus_nodes(
         "insert into mart.metric_node_values ("
         "run_id, issuer_id, node_id, node_key, period, period_tag, "
         "value, unit, availability_status, reason_codes, "
-        "source_evidence_status, factor_validation_status, confidence, tree_id, tree_version, tree_sha256"
-        ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "source_evidence_status, confidence, tree_id, tree_version, tree_sha256"
+        ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "on conflict (run_id, issuer_id, node_id, period) do update set "
         "value = excluded.value, availability_status = excluded.availability_status, "
         "reason_codes = excluded.reason_codes, source_evidence_status = excluded.source_evidence_status, "

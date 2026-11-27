@@ -354,8 +354,8 @@ def _seed_trace_lineage(
             ),
         )
     conn.execute(
-        "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, value, availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id, tree_version, tree_sha256, input_observation_ids, recorded_at) "
-        "values (%s, %s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid, 'gppe_uniform_charge_v0', '2025-12-31', 12.5, 'available', '{}', 'verified', 'not_evaluated', 0.85, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0', %s, %s, %s::timestamptz) "
+        "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, value, availability_status, reason_codes, source_evidence_status, confidence, tree_id, tree_version, tree_sha256, input_observation_ids, recorded_at) "
+        "values (%s, %s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid, 'gppe_uniform_charge_v0', '2025-12-31', 12.5, 'available', '{}', 'verified', 0.85, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0', %s, %s, %s::timestamptz) "
         "on conflict (run_id, issuer_id, node_id, period) do nothing",
         (
             capture_run_id,
@@ -503,13 +503,13 @@ def main() -> int:
                 (entity_id, legacy_id, entity_id, mic_ticker, entity_id, display_name),
             )
             conn.execute(
-                "insert into mart.issuer_analyst_ratings (run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status) "
-                "values (%s, %s, %s, 4.35, 18, 12, 5, 1, 0.88, %s, 'origin:moomoo:v1', 'available', 'verified', 'accepted') on conflict (run_id, issuer_id) do nothing",
+                "insert into mart.issuer_analyst_ratings (run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, confidence, reason_codes, extractor, availability_status, source_evidence_status) "
+                "values (%s, %s, %s, 4.35, 18, 12, 5, 1, 0.88, %s, 'origin:moomoo:v1', 'available', 'verified') on conflict (run_id, issuer_id) do nothing",
                 (module_run_id, entity_id, PREVIEW_CUTOFF, ["target_price:195.00", "consensus:buy"]),
             )
             conn.execute(
-                "insert into mart.issuer_supply_chain_exposure (run_id, issuer_id, cutoff, exposure_score, direct_partners, suppliers_count, customers_count, max_partner_share, confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status) "
-                "values (%s, %s, %s, 0.72, 6, 3, 3, 0.34, 0.85, %s, 'graph:kg-edges:v1', 'available', 'verified', 'accepted') on conflict (run_id, issuer_id) do nothing",
+                "insert into mart.issuer_supply_chain_exposure (run_id, issuer_id, cutoff, exposure_score, direct_partners, suppliers_count, customers_count, max_partner_share, confidence, reason_codes, extractor, availability_status, source_evidence_status) "
+                "values (%s, %s, %s, 0.72, 6, 3, 3, 0.34, 0.85, %s, 'graph:kg-edges:v1', 'available', 'verified') on conflict (run_id, issuer_id) do nothing",
                 (module_run_id, entity_id, PREVIEW_CUTOFF, ["supplier:tsmc", "customer:msft"]),
             )
         conn.commit()

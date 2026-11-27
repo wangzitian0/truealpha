@@ -636,12 +636,13 @@ def export_or_render_card(
         if req.card_kind in (CardKind.RANKING, CardKind.COMPARISON, CardKind.STRATEGY_SUMMARY)
         else None
     )
+    if req.format == "html" and req.page is not None:
+        raise ValueError("Paginated HTML card export is not supported; use format='json' or omit page.")
     card = enrich_card_metadata(
         card,
         report,
         strategy_context=strategy_ctx,
         style_preset=req.preset,
-        include_rendered_html=False,
     )
     if req.page is not None:
         pages = paginate_card_series(card, preset=req.preset)

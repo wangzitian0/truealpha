@@ -10,7 +10,7 @@ from factors.base.etf_virtual_company import FundConsolidation, HoldingLine, con
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from psycopg import Connection
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import AvailabilityStatus, InputEvidenceStatus
 
 from data_engine.datahub._helpers import gppe_branch_predicate, has_column
 from data_engine.datahub.capture_core.status_dimensions import coverage_status_dimensions
@@ -222,7 +222,7 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
 
 def _status_dimensions(
     consolidation: FundConsolidation,
-) -> tuple[AvailabilityStatus, InputEvidenceStatus, FactorValidationStatus]:
+) -> tuple[AvailabilityStatus, InputEvidenceStatus]:
     return coverage_status_dimensions(
         value_present=consolidation.result.value is not None,
         confidence=consolidation.result.confidence,
@@ -241,7 +241,7 @@ def materialize_fund_consolidation(
     store_virtual = has_column(connection, "mart", "fund_virtual_company", "virtual_revenue")
     for vintage in load_fund_vintages(connection, run_id=run_id, cutoff=cutoff):
         consolidation = consolidate_fund(vintage.lines, fund_id=vintage.fund_id, as_of=cutoff, definition=definition)
-        availability, evidence, validation = _status_dimensions(consolidation)
+        availability, evidence = _status_dimensions(consolidation)
         val_basis = None if consolidation.result.value is None else vintage.valuation_basis
         if store_virtual:
             connection.execute(
@@ -251,9 +251,9 @@ def materialize_fund_consolidation(
                      definition_version, definition_sha256, weighted_valuation_gap,
                      total_weight_pct, resolved_weight_pct, valued_weight_pct,
                      lines, valued_lines, confidence, reason_codes,
-                     availability_status, source_evidence_status, factor_validation_status, valuation_basis,
+                     availability_status, source_evidence_status, valuation_basis,
                      virtual_revenue, virtual_gross_profit, virtual_employees, virtual_gppe)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (run_id, fund_id) do update set
                     fund_name = excluded.fund_name,
                     report_period = excluded.report_period,
@@ -271,7 +271,6 @@ def materialize_fund_consolidation(
                     reason_codes = excluded.reason_codes,
                     availability_status = excluded.availability_status,
                     source_evidence_status = excluded.source_evidence_status,
-                    factor_validation_status = excluded.factor_validation_status,
                     valuation_basis = excluded.valuation_basis,
                     virtual_revenue = excluded.virtual_revenue,
                     virtual_gross_profit = excluded.virtual_gross_profit,
@@ -297,7 +296,6 @@ def materialize_fund_consolidation(
                     list(consolidation.result.flags),
                     availability.value,
                     evidence.value,
-                    validation.value,
                     val_basis,
                     consolidation.virtual_revenue,
                     consolidation.virtual_gross_profit,
@@ -313,8 +311,8 @@ def materialize_fund_consolidation(
                      definition_version, definition_sha256, weighted_valuation_gap,
                      total_weight_pct, resolved_weight_pct, valued_weight_pct,
                      lines, valued_lines, confidence, reason_codes,
-                     availability_status, source_evidence_status, factor_validation_status, valuation_basis)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     availability_status, source_evidence_status, valuation_basis)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (run_id, fund_id) do update set
                     fund_name = excluded.fund_name,
                     report_period = excluded.report_period,
@@ -332,7 +330,6 @@ def materialize_fund_consolidation(
                     reason_codes = excluded.reason_codes,
                     availability_status = excluded.availability_status,
                     source_evidence_status = excluded.source_evidence_status,
-                    factor_validation_status = excluded.factor_validation_status,
                     valuation_basis = excluded.valuation_basis
                 """,
                 (
@@ -354,7 +351,6 @@ def materialize_fund_consolidation(
                     list(consolidation.result.flags),
                     availability.value,
                     evidence.value,
-                    validation.value,
                     val_basis,
                 ),
             )

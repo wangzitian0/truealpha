@@ -326,18 +326,18 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
                 "insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time, "
                 "cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis, "
                 "total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence, "
-                "reason_codes, availability_status, source_evidence_status, factor_validation_status) "
+                "reason_codes, availability_status, source_evidence_status) "
                 "values (%s, 'etf:series:ZZCI', 'CI Fund', '2026-06-30', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'v0', "
-                "%s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available', 'verified', 'not_evaluated')",
+                "%s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available', 'verified')",
                 (old_cap, "c" * 64),
             )
             conn.execute(
                 "insert into mart.issuer_theme_purity (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, "
                 "cutoff, period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue, out_of_theme_revenue, "
                 "unclassified_revenue, partition_residual, segments, confidence, reason_codes, extractor, availability_status, "
-                "source_evidence_status, factor_validation_status) "
+                "source_evidence_status) "
                 "values (%s, %s, 4242, 'ai-infra', 'AI-INFRA', 'v0', %s, '2026-06-01T00:00:00Z', '2025-12-31', %s, '0.5', '100', '50', '50', '0', '0', "
-                "2, '0.9', '{}', 'rule:test', 'available', 'verified', 'not_evaluated')",
+                "2, '0.9', '{}', 'rule:test', 'available', 'verified')",
                 (old_cap, issuer, "a" * 64, f"segment-partition:{'b' * 64}"),
             )
             conn.commit()
