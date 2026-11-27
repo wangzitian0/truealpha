@@ -14,7 +14,7 @@ PINS: dict[str, tuple[str, ...]] = {
         "**Only a production change returns to the owner.** A production change alters what production runs or stores (deploy, promote or apply to production; production secret write; manual production data write or deletion; production DNS, route or host change; unrecallable release; or scheduled unapproved production code).",
         "**Self-guard:** an edit that removes, narrows or redefines the production reservation needs the owner's approval of its head SHA.",
         "It also covers removing or weakening a pin of this section, its pin test, or the required check that runs the test.",
-        "Production here (`docs/release-protocol.md`): the infra2 workflow `reconcile-iac-inputs.yml` with `promote_prod=true` and the infra2 workflow `deploy.yml` with `type=prod`.",
+        "Production here (`docs/release-protocol.md`): the infra2 workflow `reconcile-iac-inputs.yml` with `promote_prod=true`.",
         "The owner-approval checks of those infra2 paths are part of the reservation itself.",
     ),
 }
