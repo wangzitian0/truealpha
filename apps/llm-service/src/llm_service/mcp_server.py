@@ -138,9 +138,12 @@ class StrategyBacktestDetailToolRequest(_ToolModel):
 
 class StrategyBacktestTriggerToolRequest(_ToolModel):
     definition_resource: str | None = None
+    custom_definition: dict[str, Any] | None = None
+    release_manifest_id: str | None = None
     start_cutoff: str | None = None
     end_cutoff: str | None = None
     executed_at: str | None = None
+    idempotency_key: str | None = None
 
 
 class EntitiesHoldingsToolRequest(_ToolModel):
@@ -439,9 +442,12 @@ def build_mcp_server(
             MCP_OWNER_PRINCIPAL_ID,
             TriggerBacktestRequest(
                 definition_resource=request.definition_resource,
+                custom_definition=request.custom_definition,
+                release_manifest_id=request.release_manifest_id,
                 start_cutoff=request.start_cutoff,
                 end_cutoff=request.end_cutoff,
                 executed_at=request.executed_at,
+                idempotency_key=request.idempotency_key,
             ),
         )
 

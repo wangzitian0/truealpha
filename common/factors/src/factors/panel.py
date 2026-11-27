@@ -9,7 +9,6 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Any
 
 import polars as pl
-import truealpha_contracts.metrics as _m
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.metrics import (
     ALL_ISSUER_CLASSES,
@@ -33,10 +32,7 @@ from truealpha_contracts.metrics import (
 from truealpha_contracts.strategy import LaborEfficiencyTreePin, LargeModelValueV0Definition
 
 PANEL_DECIMAL_PRECISION = 34
-PANEL_DECIMAL_ROUNDING = "ROUND_HALF_EVEN"
 PANEL_DECIMAL_CONTEXT = Context(prec=PANEL_DECIMAL_PRECISION, rounding=ROUND_HALF_EVEN)
-MINTED_NODE_IDS, MINTED_TREE_IDS, NAMESPACE_UUID = _m.MINTED_NODE_IDS, _m.MINTED_TREE_IDS, _m.NAMESPACE_UUID
-PHYSICALLY_NON_NEGATIVE = _m.PHYSICALLY_NON_NEGATIVE
 _ = (AliasKind, SignFinding, input_key_of, judge_sign, metric_of, node_id_for, tree_id_for)
 
 EXPR_OPERATING_GROSS_PROFIT: pl.Expr = (
@@ -48,15 +44,9 @@ EXPR_CAPITAL_CHARGE: pl.Expr = pl.col("total_assets") * pl.col("risk_free_rate")
 EXPR_CAPITAL_ADJUSTED_GROSS_PROFIT: pl.Expr = pl.col("operating_gross_profit") - pl.col("capital_charge")
 _TD_COLS = ("preferred_stock_value", "goodwill", "intangible_assets_net_excluding_goodwill")
 EXPR_TANGIBLE_DEDUCTIONS: pl.Expr = pl.col(_TD_COLS[0]) + pl.col(_TD_COLS[1]) + pl.col(_TD_COLS[2])
-EXPR_TANGIBLE_DEDUCTIONS_FILL_NULL: pl.Expr = (
-    pl.col(_TD_COLS[0]).fill_null(0) + pl.col(_TD_COLS[1]).fill_null(0) + pl.col(_TD_COLS[2]).fill_null(0)
-)
 EXPR_TANGIBLE_COMMON_EQUITY: pl.Expr = pl.col("stockholders_equity") - pl.col("tangible_deductions")
 EXPR_CHARGED_TANGIBLE_COMMON_EQUITY: pl.Expr = (
     pl.when(pl.col("tangible_common_equity") >= 0).then(pl.col("tangible_common_equity")).otherwise(None)
-)
-EXPR_POSITIVE_TANGIBLE_COMMON_EQUITY: pl.Expr = (
-    pl.when(pl.col("tangible_common_equity") > 0).then(pl.col("tangible_common_equity")).otherwise(None)
 )
 EXPR_CAPITAL_CHARGE_TCE: pl.Expr = pl.col("charged_tangible_common_equity") * pl.col("risk_free_rate")
 EXPR_CAPITAL_ADJUSTED_TCE: pl.Expr = pl.col("pre_provision_profit") - pl.col("capital_charge_tce")
@@ -88,27 +78,6 @@ EXPR_MARKET_CAP: pl.Expr = (
     .otherwise(None)
 )
 
-_NI_Y3, _NI_Y2, _NI_Y1, _NI_Y0 = (
-    pl.col("net_income") if shift == 0 else pl.col("net_income").shift(shift).over("issuer_id") for shift in range(4)
-)
-_WEIGHTED_GROWTH_3Y: pl.Expr = (
-    1.0 * (_NI_Y1 / _NI_Y0 - 1.0) + 2.0 * (_NI_Y2 / _NI_Y1 - 1.0) + 3.0 * (_NI_Y3 / _NI_Y2 - 1.0)
-) / 6.0
-_NI_POS: pl.Expr = (_NI_Y0 > 0) & (_NI_Y1 > 0) & (_NI_Y2 > 0) & (_NI_Y3 > 0) & (_WEIGHTED_GROWTH_3Y > 0)
-_PEG_VALID: pl.Expr = (pl.col("price") > 0) & (pl.col("shares_outstanding") > 0) & _NI_POS
-_PEG_VAL: pl.Expr = ((pl.col("price") * pl.col("shares_outstanding")) / _NI_Y3) / (_WEIGHTED_GROWTH_3Y * 100.0)
-EXPR_PEG: pl.Expr = pl.when(_PEG_VALID).then(_PEG_VAL).otherwise(None)
-EXPR_PEG_CONSENSUS: pl.Expr = (
-    pl.when(
-        (pl.col("price") > 0)
-        & (pl.col("shares_outstanding") > 0)
-        & (pl.col("net_income") > 0)
-        & (pl.col("consensus_profit_growth") > 0)
-    )
-    .then(((pl.col("price") * pl.col("shares_outstanding")) / pl.col("net_income")) / pl.col("consensus_profit_growth"))
-    .otherwise(None)
-)
-
 INTERMEDIATE_EXPRESSIONS: Mapping[str, pl.Expr] = {
     "operating_gross_profit": EXPR_OPERATING_GROSS_PROFIT,
     "capital_charge": EXPR_CAPITAL_CHARGE,
@@ -127,8 +96,6 @@ FACTOR_EXPRESSIONS: Mapping[str, pl.Expr] = {
     "gppe_operating_financial_v1": EXPR_GPPE_OPERATING_FINANCIAL_V1,
     "price_to_sales": EXPR_PRICE_TO_SALES,
     "price_to_gross_profit": EXPR_PRICE_TO_GROSS_PROFIT,
-    "peg": EXPR_PEG,
-    "peg_consensus": EXPR_PEG_CONSENSUS,
 }
 PANEL_EXPRESSIONS: Mapping[str, pl.Expr] = {**INTERMEDIATE_EXPRESSIONS, **FACTOR_EXPRESSIONS}
 PANEL_INDEX_COLUMNS: frozenset[str] = frozenset({"issuer_id", "period", "issuer_class"})

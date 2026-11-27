@@ -81,8 +81,6 @@ SOURCE_RELIABILITY_PRIORS: Mapping[str, Decimal] = MappingProxyType(
         "origin:sec-company-facts:v1": Decimal("0.98"),
         "sec-nport": Decimal("0.98"),
         "origin:sec-nport:v1": Decimal("0.98"),
-        "nasdaq-index": Decimal("0.98"),
-        "origin:nasdaq-index:v1": Decimal("0.98"),
         "us-treasury": Decimal("0.98"),
         "us-treasury-par-yield": Decimal("0.98"),
         "moomoo": Decimal("0.96"),

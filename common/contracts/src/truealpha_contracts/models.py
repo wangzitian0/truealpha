@@ -17,7 +17,6 @@ class DataSource(StrEnum):
     YAHOO = "yahoo"
     TWELVE_DATA = "twelvedata"
     OPENFIGI = "openfigi"
-    NASDAQ_INDEX = "nasdaq-index"
     US_TREASURY = "us-treasury"
     RELEASE = "release"
 

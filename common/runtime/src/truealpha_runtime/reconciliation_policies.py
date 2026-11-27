@@ -37,8 +37,8 @@ FINANCIAL_FACT_RECONCILIATION_POLICY = _pol(
     "financial-fact-fusion:v2", ("sec-company-facts:v1", "moomoo-financials:v1")
 )
 INDEX_MEMBERSHIP_POLICY = _pol(
-    "index-membership-fusion:v1",
-    ("nasdaq-index:v1", "nport:v1"),
+    "index-membership-fusion:v2",
+    ("nport:v1",),
     rel=Decimal("0.10"),
     abs_tol=Decimal("0.05"),
     behavior=ConflictBehavior.REPORT_AND_ABSTAIN,

@@ -774,7 +774,6 @@ _SOURCE_SUBSTRING_ORIGINS = (
     ("twelve", "origin:twelve-data:v1"),
     ("yahoo", "origin:yahoo:v1"),
     ("nport", "origin:sec-nport:v1"),
-    ("nasdaq", "origin:nasdaq-index:v1"),
 )
 
 
@@ -795,6 +794,8 @@ def _resolve_row_origin_id(row: Mapping[str, Any]) -> str | None:
     if source.startswith("origin:"):
         return source
     lowered = source.lower()
+    if "nasdaq" in lowered:
+        return None
     for token, origin_id in _SOURCE_SUBSTRING_ORIGINS:
         if token in lowered:
             return origin_id

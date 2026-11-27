@@ -13,7 +13,6 @@ dependencies = [
     "psycopg-pool>=3.2.0",
     "pyjwt>=2.15.1",
     "bcrypt>=4.0.0",
-    "truealpha-factors",
     "mcp>=1.30.0,<2",
     "truealpha-contracts",
     "truealpha-runtime",
@@ -27,7 +26,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-truealpha-factors = { workspace = true }
 truealpha-contracts = { workspace = true }
 truealpha-runtime = { workspace = true }
 

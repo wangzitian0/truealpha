@@ -103,6 +103,8 @@ def test_pipeline_trigger_sensor_dispatches_nightly_backtest(monkeypatch: pytest
                             False,
                             {
                                 "definition_resource": "large_model_value_v0_definition_1_1_0.json",
+                                "release_manifest_id": "release-manifest:test-bt",
+                                "exploratory": True,
                                 "start_cutoff": "2024-01-01T00:00:00Z",
                             },
                         )
@@ -131,8 +133,16 @@ def test_pipeline_trigger_sensor_dispatches_nightly_backtest(monkeypatch: pytest
     op_cfg = reqs[0].run_config["ops"]["run_nightly_backtest_op"]["config"]
     assert op_cfg["executed_at"] == executed_at.isoformat()
     assert op_cfg["definition_resource"] == "large_model_value_v0_definition_1_1_0.json"
+    assert op_cfg["release_manifest_id"] == "release-manifest:test-bt"
+    assert op_cfg["exploratory"] is True
     assert op_cfg["start_cutoff"] == "2024-01-01T00:00:00Z"
     assert updates == [(f"manual:{dedupe}", 42)]
+
+    from data_engine.lanes.backtest import NightlyBacktestConfig, _backtest_kwargs_from_config
+
+    kwargs = _backtest_kwargs_from_config(NightlyBacktestConfig(**op_cfg))
+    assert kwargs["release_manifest_id"] == "release-manifest:test-bt"
+    assert kwargs["exploratory"] is True
 
 
 def test_sensor_targets_include_nightly_backtest_pipeline() -> None:

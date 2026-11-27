@@ -1,7 +1,7 @@
 [project]
 name = "truealpha-factors"
 version = "0.1.0"
-description = "The single implementation of the seven analytics modules (init.md Section 7). data-engine and llm-service import from here — computation logic exists in exactly one place."
+description = "The single implementation of the seven analytics modules (init.md Section 7). data-engine imports factor computation from here."
 requires-python = ">=3.12"
 dependencies = [
     "polars>=1.0.0",
