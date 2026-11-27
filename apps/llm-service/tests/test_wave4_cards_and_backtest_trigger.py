@@ -152,6 +152,19 @@ def test_export_or_render_card_routes_etf_and_supply_chain_cards(monkeypatch: py
             ),
             research_repo=_FakeRepo(),
         )
+    with pytest.raises(ValueError, match="Paginated HTML card export is not supported"):
+        library_service.export_or_render_card(
+            ctx,
+            library_service.CardExportRequest(
+                card_kind=CardKind.ETF,
+                issuer_id="etf:qqq",
+                cutoff=cutoff.isoformat(),
+                page=1,
+                format="html",
+                persist=False,
+            ),
+            research_repo=_FakeRepo(),
+        )
 
 
 def test_entity_detail_reads_materialized_geometric_cagr_peg_node() -> None:

@@ -138,7 +138,7 @@ _DECISIONS_SQL = (
     " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
     " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
     " d.eligible, d.outcome, d.exclusion_reason, d.availability_status,"
-    " d.source_evidence_status, d.factor_validation_status, d.peg_reason_codes,"
+    " d.source_evidence_status, d.peg_reason_codes,"
     " d.rank, d.target_weight, d.peg, d.peg_rank,"
     " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
     " peg_c.reason_codes as peg_consensus_reason_codes,"

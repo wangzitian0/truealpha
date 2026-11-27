@@ -23,8 +23,7 @@
         "reason_codes": ["edge_confidence_floor"],
         "extractor": "graph:kg-edges:v1",
         "availability_status": "available",
-        "source_evidence_status": "verified",
-        "factor_validation_status": "not_evaluated"
+        "source_evidence_status": "verified"
       },
       {
         "run": "unserved",
@@ -38,8 +37,7 @@
         "reason_codes": [],
         "extractor": "graph:kg-edges:v1",
         "availability_status": "available",
-        "source_evidence_status": "verified",
-        "factor_validation_status": "not_evaluated"
+        "source_evidence_status": "verified"
       }
     ],
     "expected": {
@@ -54,8 +52,7 @@
       "reason_codes": ["edge_confidence_floor"],
       "extractor": "graph:kg-edges:v1",
       "availability_status": "available",
-      "source_evidence_status": "verified",
-      "factor_validation_status": "not_evaluated"
+      "source_evidence_status": "verified"
     }
   },
   "analyst_ratings": {
@@ -72,8 +69,7 @@
         "reason_codes": [],
         "extractor": "origin:moomoo:v1",
         "availability_status": "available",
-        "source_evidence_status": "verified",
-        "factor_validation_status": "not_evaluated"
+        "source_evidence_status": "verified"
       },
       {
         "run": "unserved",
@@ -87,8 +83,7 @@
         "reason_codes": [],
         "extractor": "origin:moomoo:v1",
         "availability_status": "available",
-        "source_evidence_status": "verified",
-        "factor_validation_status": "not_evaluated"
+        "source_evidence_status": "verified"
       }
     ],
     "expected": {
@@ -104,8 +99,7 @@
       "reason_codes": [],
       "extractor": "origin:moomoo:v1",
       "availability_status": "available",
-      "source_evidence_status": "verified",
-      "factor_validation_status": "not_evaluated"
+      "source_evidence_status": "verified"
     }
   }
 }

@@ -1,7 +1,6 @@
 import { api } from "@/client/api";
 import { formatCell, formatNumberMagnitude, formatRatio, formatUsdMagnitude } from "@/client/format";
 import { valuationBasisLabel } from "@/client/strategy";
-import { CardExportButton } from "@/components/card-export-button";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
 import { ReadStateNotice } from "@/components/read-state";
@@ -35,19 +34,10 @@ export default async function HoldingsPage() {
                   {fund.virtual_employees ? ` · virtual emp ${formatNumberMagnitude(fund.virtual_employees)}` : ""}
                   {fund.virtual_gppe ? ` · virtual GPPE ${formatUsdMagnitude(fund.virtual_gppe)}` : ""}
                   {fund.availability_status
-                    ? ` · ${[
-                        fund.availability_status,
-                        fund.source_evidence_status,
-                        fund.factor_validation_status && fund.factor_validation_status !== "not_evaluated"
-                          ? fund.factor_validation_status
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join("/")}`
+                    ? ` · ${[fund.availability_status, fund.source_evidence_status].filter(Boolean).join("/")}`
                     : ""}
                 </span>
               </div>
-              <CardExportButton kind="etf" issuerId={fund.fund_id} />
             </div>
             <ResearchTable caption={`Holdings for ${fund.fund_name}`} headers={["Holding", "Ticker", "Weight", "P/S", "P/GP", "Target mid", "Gap", "GPPE tier"]}>
               {(fund.lines ?? []).map((line, index) => {

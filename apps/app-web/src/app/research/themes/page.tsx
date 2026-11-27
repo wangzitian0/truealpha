@@ -58,14 +58,9 @@ export default async function ThemesPage() {
                   <td className="px-4 py-3 tabular-nums">{formatCell(formatRatio(row.confidence))}</td>
                   <td className="px-4 py-3 text-xs">
                     <div>{row.availability_status}</div>
-                    {(row.source_evidence_status || (row.factor_validation_status && row.factor_validation_status !== "not_evaluated")) && (
+                    {row.source_evidence_status && (
                       <div className="font-mono text-[10px] text-gray-500">
-                        {[
-                          row.source_evidence_status,
-                          row.factor_validation_status !== "not_evaluated" ? row.factor_validation_status : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" / ")}
+                        {row.source_evidence_status}
                       </div>
                     )}
                   </td>

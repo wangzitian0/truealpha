@@ -25,7 +25,7 @@ from factors.snapshot_inputs import (
     GppeV0Definition,
     MetricFreshness,
 )
-from truealpha_contracts.execution import FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import InputEvidenceStatus
 
 
 def test_calibrated_confidence_for_routes_through_cell_confidence_evaluator() -> None:
@@ -232,7 +232,7 @@ def test_panel_leaves_and_market_cap_materialize_without_mutating_gppe_sha(monke
 
     class _FakeConn:
         def execute(self, _sql: str, params: tuple[Any, ...]) -> Any:
-            inserted.append((str(params[3]), params[6], params[12]))
+            inserted.append((str(params[3]), params[6], params[11]))
 
             class _Res:
                 def fetchone(self) -> tuple[Any]:
@@ -317,7 +317,6 @@ def test_panel_leaves_and_market_cap_materialize_without_mutating_gppe_sha(monke
         freshness=MetricFreshness.FRESH,
         base_confidence=Decimal("0.80"),
         source_evidence=InputEvidenceStatus.VERIFIED,
-        validation_status=FactorValidationStatus.ACCEPTED,
     )
     assert count >= 7
     by_key = {k: (val, conf) for k, val, conf in inserted}

@@ -48,9 +48,8 @@ from data_engine.datahub.capture_core.status_dimensions import (
 )
 from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
 from data_engine.datahub.repository import PostgresCaptureControlRepository
-from factors.validation_records import validation_status_for
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import AvailabilityStatus, InputEvidenceStatus
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 from truealpha_runtime.testing import skip_or_fail
 
@@ -215,10 +214,7 @@ def test_status_dimensions_availability_prioritizes_unavailable_over_stale() -> 
 
 def test_status_dimensions_source_evidence_requires_dereferenced_pointers() -> None:
     """Missing or unresolved raw pointers must return degraded or rejected, never verified."""
-    assert statuses_without_raw_pointer() == (
-        InputEvidenceStatus.DEGRADED,
-        FactorValidationStatus.NOT_EVALUATED,
-    )
+    assert statuses_without_raw_pointer() is InputEvidenceStatus.DEGRADED
 
     class _MockConn:
         def __init__(self, mapping: dict[str, int | None]) -> None:
@@ -250,12 +246,6 @@ def test_status_dimensions_source_evidence_requires_dereferenced_pointers() -> N
         source_evidence_status_for(conn_valid, ("obs:1",), financial_payloads=[unevidenced])
         is InputEvidenceStatus.DEGRADED
     )
-
-
-def test_status_dimensions_validation_status_honesty() -> None:
-    """Factor validation defaults to not_evaluated in absence of sealed holdout record."""
-    status = validation_status_for(("gppe-definition:" + "a" * 64,))
-    assert status is FactorValidationStatus.NOT_EVALUATED
 
 
 # ======================================================================================
@@ -643,13 +633,13 @@ def test_5_hop_backward_lineage_trace_from_mart_to_s3_bytes(db_conn: psycopg.Con
         insert into mart.metric_node_values (
             run_id, issuer_id, node_id, node_key, period, period_tag,
             value, unit, availability_status, reason_codes,
-            source_evidence_status, factor_validation_status,
+            source_evidence_status,
             confidence, tree_id, tree_version, tree_sha256, input_observation_ids
         ) values (
             %s, 'issuer:aapl', '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid,
             'gppe_uniform_charge_v0', '2026-03-31', 'FY',
             30.0, 'per_employee', 'available', '{}',
-            'verified', 'accepted', 0.92,
+            'verified', 0.92,
             'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0',
             %s, array[%s, %s, %s, %s]
         )

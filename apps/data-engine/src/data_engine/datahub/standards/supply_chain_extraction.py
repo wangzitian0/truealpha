@@ -62,7 +62,6 @@ _UPDATE_COLS = (
     "extractor",
     "availability_status",
     "source_evidence_status",
-    "factor_validation_status",
 )
 _INSERT_SQL = (
     f"insert into mart.issuer_supply_chain_exposure (run_id, issuer_id, {', '.join(_UPDATE_COLS)}) "
@@ -640,9 +639,9 @@ def materialize_supply_chain_exposure(
     default_extractor: str = "graph:entity-relations:v1",
 ) -> int:
     """Materialize exposure rows into `mart.issuer_supply_chain_exposure`."""
-    as_of, source_status, val_status = unbacked_status_values(cutoff)
+    as_of, source_status = unbacked_status_values(cutoff)
     rows = [
-        (run_id, issuer_id, as_of, *fields, source_status, val_status)
+        (run_id, issuer_id, as_of, *fields, source_status)
         for item in exposure_data
         for issuer_id, *fields in (_exposure_params(item, as_of=as_of, default_extractor=default_extractor),)
     ]

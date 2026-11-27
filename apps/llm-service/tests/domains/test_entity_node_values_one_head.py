@@ -35,9 +35,8 @@ def _seed(conn: object, *, topt_value: str, qqq_value: str) -> None:
         for period in ("2026-09-03", "2026-11-21"):
             conn.execute(  # type: ignore[attr-defined]
                 "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, value, unit, "
-                "availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence) "
-                "values (%s, %s, %s, 'capital_charge', %s, %s, 'USD', 'available', '{}', 'verified', "
-                "'not_evaluated', 0.9)",
+                "availability_status, reason_codes, source_evidence_status, confidence) "
+                "values (%s, %s, %s, 'capital_charge', %s, %s, 'USD', 'available', '{}', 'verified', 0.9)",
                 (run_id, ISSUER, NODE_ID, period, value),
             )
 

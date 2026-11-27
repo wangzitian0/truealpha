@@ -70,7 +70,7 @@ THEME_ROWS_SQL = """
          unclassified_revenue::text as unclassified_revenue,
          partition_residual::text as partition_residual,
          segments, confidence::text as confidence, reason_codes, extractor,
-         availability_status, source_evidence_status, factor_validation_status,
+         availability_status, source_evidence_status,
          to_char(period_end, 'YYYY-MM-DD') as period_end
   from mart.issuer_theme_purity
   where run_id = %s and partition_id is not null
@@ -92,7 +92,7 @@ _COMPANY_DECISION_SQL = f"""
          d.target_weight::text as target_weight,
          d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
          d.availability_status,
-         d.source_evidence_status, d.factor_validation_status,
+         d.source_evidence_status,
          m.confidence, m.reason_codes
   from mart.strategy_decisions d
   left join mart.strategy_runs sr on sr.strategy_run_id = d.strategy_run_id
@@ -122,7 +122,7 @@ _FUND_VIRTUAL_COLS = (
     " to_jsonb(f) ->> 'virtual_employees' as virtual_employees,"
     " to_jsonb(f) ->> 'virtual_gppe' as virtual_gppe,"
     " f.confidence::text as confidence, coalesce(f.availability_status, 'unavailable') as availability_status,"
-    " f.source_evidence_status, f.factor_validation_status, f.reason_codes"
+    " f.source_evidence_status, f.reason_codes"
 )
 
 
@@ -166,7 +166,6 @@ class ThemePurityRowDto(BaseModel):
     extractor: str
     availability_status: str
     source_evidence_status: str
-    factor_validation_status: str
     period_end: str
 
 
@@ -214,7 +213,6 @@ class FundValuationDto(BaseModel):
     virtual_gppe: str | None = None
     availability_status: str | None = None
     source_evidence_status: str | None = None
-    factor_validation_status: str | None = None
     reason_codes: list[str] = Field(default_factory=list)
     lines: list[ValuedHoldingRowDto] = Field(default_factory=list)
 
@@ -459,7 +457,6 @@ def _decision_row_to_dto(row: dict[str, Any], *, display_map: dict[str, EntityDi
         peg_rank=_opt_int(row, "peg_rank"),
         availability=avail,
         source_evidence_status=_opt_str(row, "source_evidence_status"),
-        factor_validation_status=_opt_str(row, "factor_validation_status"),
         peg_reason_codes=[str(c) for c in (row.get("peg_reason_codes") or ())],
         trace_id=trace_id,
     )
@@ -783,7 +780,6 @@ def get_themes_overview(*, database_url: str | None = None) -> ThemesResponse:
                     extractor=str(r.get("extractor") or ""),
                     availability_status=str(r.get("availability_status") or "unavailable"),
                     source_evidence_status=str(r.get("source_evidence_status") or ""),
-                    factor_validation_status=str(r.get("factor_validation_status") or ""),
                     period_end=str(r.get("period_end") or ""),
                 )
             )
@@ -879,7 +875,6 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
                     virtual_gppe=c.get("virtual_gppe"),
                     availability_status=c.get("availability_status"),
                     source_evidence_status=c.get("source_evidence_status"),
-                    factor_validation_status=c.get("factor_validation_status"),
                     reason_codes=list(c.get("reason_codes") or ()),
                 )
                 by_fund[fid] = fund
@@ -959,7 +954,6 @@ def _format_company_profile(
         "peg": _opt_str(decision_row, "peg"),
         "peg_rank": _opt_int(decision_row, "peg_rank"),
         "source_evidence_status": _opt_str(decision_row, "source_evidence_status"),
-        "factor_validation_status": _opt_str(decision_row, "factor_validation_status"),
         "peg_reason_codes": [str(c) for c in (decision_row or {}).get("peg_reason_codes") or ()],
     }
     gppe_val = _opt_str(gppe_row, "gppe")

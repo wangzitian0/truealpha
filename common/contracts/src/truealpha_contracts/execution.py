@@ -1,4 +1,4 @@
-"""Factor availability, input evidence, and validation status enums."""
+"""Factor availability and input evidence status enums."""
 
 from __future__ import annotations
 
@@ -19,9 +19,3 @@ class AvailabilityStatus(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     NOT_APPLICABLE = "not_applicable"
     ERROR = "error"
-
-
-class FactorValidationStatus(StrEnum):
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
-    NOT_EVALUATED = "not_evaluated"

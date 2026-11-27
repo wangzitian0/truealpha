@@ -21,7 +21,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
+from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.issuer_modules_mart import PostgresIssuerModuleReader
 from truealpha_runtime.research_report import (
@@ -191,7 +191,6 @@ def test_the_deployed_reader_fills_peg_supply_chain_and_analyst_sections_from_ma
     supply_chain = sections[ReportSectionKind.SUPPLY_CHAIN]
     expected = CANON["supply_chain_exposure"]["expected"]
     assert supply_chain.availability is AvailabilityStatus.AVAILABLE
-    assert supply_chain.validation_status is FactorValidationStatus.NOT_EVALUATED
     assert supply_chain.reason_codes == tuple(expected["reason_codes"])
     assert {result.label: result.value for result in supply_chain.results}["exposure_score"] == "0.4200"
     assert all(result.trace is not None and CANON["served_run_id"] in result.trace.reference_id

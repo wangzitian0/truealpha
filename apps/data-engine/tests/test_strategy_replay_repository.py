@@ -135,22 +135,21 @@ def test_snapshot_id_is_persisted_and_distinguishes_the_run(connection) -> None:
     ).fetchone() == (None,)
 
 
-def test_a_decision_row_carries_the_three_status_dimensions(connection) -> None:
+def test_a_decision_row_carries_availability_and_evidence_dimensions(connection) -> None:
     """#747: excluded by the strategy's own rule → `excluded`; a ranked issuer → `available`;
-    evidence is `degraded` until the replay reads from the vintage plane (#530 items 5–6);
-    validation is `not_evaluated` until a sealed holdout record exists (#65)."""
+    evidence is `degraded` until the replay reads from the vintage plane (#530 items 5–6)."""
     decisions, definition = run()
     run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
     for decision in decisions:
         write_strategy_decision(connection, decision, strategy_run_id=run_id, definition=definition)
     rows = connection.execute(
         "select issuer_id, eligible, exclusion_reason, capital_adjusted_labor_efficiency, "
-        "availability_status, source_evidence_status, factor_validation_status "
+        "availability_status, source_evidence_status "
         "from mart.strategy_decisions where strategy_run_id = %s",
         (run_id,),
     ).fetchall()
     assert len(rows) == len(decisions)
-    for _issuer, eligible, exclusion_reason, efficiency, availability_status, evidence, validation in rows:
+    for _issuer, eligible, exclusion_reason, efficiency, availability_status, evidence in rows:
         if not eligible and exclusion_reason:
             assert availability_status == "excluded"
         elif efficiency is None:
@@ -158,7 +157,6 @@ def test_a_decision_row_carries_the_three_status_dimensions(connection) -> None:
         else:
             assert availability_status == "available"
         assert evidence == "degraded"
-        assert validation == "not_evaluated"
 
 
 def test_the_peg_reason_is_persisted_outside_the_decisions_identity(connection) -> None:

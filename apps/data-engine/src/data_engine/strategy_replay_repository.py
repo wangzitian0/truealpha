@@ -128,8 +128,7 @@ def write_strategy_decision(
         value_present=decision.capital_adjusted_labor_efficiency is not None,
         not_applicable=decision.issuer_id in exempt_issuers,
     )
-    definition_ids = () if definition is None else (f"{definition.strategy_id}:{definition.content_sha256}",)
-    default_evidence, factor_validation_status = statuses_without_raw_pointer(definition_ids)
+    default_evidence = statuses_without_raw_pointer()
     resolved_evidence_status = default_evidence if source_evidence_status is None else source_evidence_status
     content_sha256 = canonical_sha256(payload)
     decision_id = f"strategy-decision:{content_sha256}"
@@ -143,9 +142,9 @@ def write_strategy_decision(
         "insert into mart.strategy_decisions (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, "
         "cutoff_at, capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales, "
         "valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank, peg_reason_codes, "
-        "availability_status, source_evidence_status, factor_validation_status, labor_efficiency_metric, "
+        "availability_status, source_evidence_status, labor_efficiency_metric, "
         "current_price_to_gross_profit, target_price_to_gross_profit) values ("
-        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
         ") on conflict (strategy_decision_id) do nothing returning strategy_decision_id",
         (
             decision_id,
@@ -168,7 +167,6 @@ def write_strategy_decision(
             list(decision.peg_reason_codes),
             availability_status.value,
             resolved_evidence_status.value,
-            factor_validation_status.value,
             decision.labor_efficiency_metric,
             decision.current_price_to_gross_profit,
             decision.target_price_to_gross_profit,

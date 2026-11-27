@@ -115,7 +115,6 @@ class StrategyDecisionItemDto(BaseModel):
     peg_rank: int | None = None
     availability: str = "unavailable"
     source_evidence_status: str | None = None
-    factor_validation_status: str | None = None
     peg_reason_codes: list[str] = Field(default_factory=list)
     trace_id: str = ""
     gppe_variants: dict[str, WidePanelCellDto | None] = Field(default_factory=dict)
@@ -361,7 +360,6 @@ def _decision_to_dto(
         peg_rank=getattr(decision, "peg_rank", None),
         availability=avail,
         source_evidence_status=getattr(decision, "source_evidence_status", None),
-        factor_validation_status=getattr(decision, "factor_validation_status", None),
         peg_reason_codes=[str(c) for c in (getattr(decision, "peg_reason_codes", None) or ())],
         trace_id=trace_id,
         gppe_variants=gppe_variants,

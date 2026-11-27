@@ -9,7 +9,7 @@ from typing import Literal, Protocol
 
 from pydantic import Field, model_validator
 from truealpha_contracts.common import AwareDatetime, StrictFrozenModel, canonical_sha256
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
+from truealpha_contracts.execution import AvailabilityStatus
 
 from truealpha_runtime.access import AccessContext
 
@@ -58,7 +58,6 @@ class ReportSection(StrictFrozenModel):
     section_kind: ReportSectionKind
     title: str = Field(min_length=1)
     availability: AvailabilityStatus
-    validation_status: FactorValidationStatus | None = None
     results: tuple[ResultValue, ...] = ()
     notes: tuple[str, ...] = ()
     reason_codes: tuple[str, ...] = ()
@@ -181,8 +180,6 @@ def render_report_markdown(report: ResearchReport) -> str:
         lines.extend([f"## {subject.display_name}{rank}", "", f"- Subject: `{subject.subject_id}`", ""])
         for s in subject.sections:
             lines.extend([f"### {s.title}", "", f"- Availability: `{s.availability.value}`"])
-            if s.validation_status is not None:
-                lines.append(f"- Factor validation: `{s.validation_status.value}`")
             if s.reason_codes:
                 lines.append(f"- Reasons: {', '.join(s.reason_codes)}")
             lines.append("")

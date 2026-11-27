@@ -12,7 +12,7 @@ from psycopg.rows import dict_row
 from pydantic import ValidationError
 from truealpha_contracts.common import FrozenModel
 from truealpha_contracts.confidence_bands import confidence_band
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
+from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.universes import id_prefix_like, universes_with_role
 
 from truealpha_runtime.access import AccessContext
@@ -53,7 +53,6 @@ class MetricNodeValueCell(FrozenModel):
     availability_status: str
     reason_codes: tuple[str, ...] = ()
     source_evidence_status: str
-    factor_validation_status: str
     confidence: str | None
     confidence_band: str | None = None
     tree_version: str | None = None
@@ -115,7 +114,6 @@ def _decision_section(
         section_kind=kind,
         title=title,
         availability=status,
-        validation_status=FactorValidationStatus.NOT_EVALUATED,
         results=tuple(
             ResultValue(
                 label=lb,
@@ -250,7 +248,6 @@ def _read_module_section(
         section_kind=kind,
         title=title,
         availability=row.availability_status,
-        validation_status=row.factor_validation_status,
         reason_codes=row.reason_codes,
         results=tuple(
             ResultValue(
@@ -321,7 +318,6 @@ class MartResearchReadRepository:
                  f.confidence::text as confidence,
                  f.reason_codes,
                  coalesce(f.availability_status, 'unavailable') as availability_status,
-                 coalesce(f.factor_validation_status, 'not_evaluated') as factor_validation_status,
                  f.definition_version,
                  to_jsonb(f) ->> 'virtual_revenue' as virtual_revenue,
                  to_jsonb(f) ->> 'virtual_gross_profit' as virtual_gross_profit,
@@ -372,7 +368,6 @@ class MartResearchReadRepository:
             row["report_period"].isoformat() if row.get("report_period") is not None else row_cutoff.date().isoformat()
         )
         avail = AvailabilityStatus(str(row["availability_status"]))
-        val_status = FactorValidationStatus(str(row["factor_validation_status"]))
         conf = Decimal(str(row["confidence"])) if row.get("confidence") is not None else None
         reasons = tuple(str(c) for c in (row.get("reason_codes") or ()))
         fver = str(row.get("definition_version") or "etf_virtual_company:v0")
@@ -403,7 +398,6 @@ class MartResearchReadRepository:
                     section_kind=ReportSectionKind.ETF_VIRTUAL_COMPANY,
                     title="ETF virtual company",
                     availability=avail,
-                    validation_status=val_status,
                     reason_codes=reasons,
                     results=(
                         _rv("weighted_valuation_gap", row.get("weighted_valuation_gap")),
@@ -419,7 +413,6 @@ class MartResearchReadRepository:
                     section_kind=ReportSectionKind.VALUATION,
                     title="Valuation (ETF consolidation)",
                     availability=avail,
-                    validation_status=val_status,
                     reason_codes=reasons,
                     results=(
                         _rv("valuation_basis", row.get("valuation_basis")),
@@ -624,7 +617,7 @@ class PostgresMetricNodeValueRepository:
                     return MetricNodeValueUnavailable(node_key=node_key, reason=err or "no_run")
                 where = "v.run_id = %s and v.node_key = %s" + (" and v.issuer_id = %s" if issuer_id is not None else "")
                 rows = conn.execute(
-                    f"select v.issuer_id, v.node_id::text as node_id, v.node_key, v.period, v.period_tag, v.value::text as value, v.unit, v.availability_status, v.reason_codes, v.source_evidence_status, v.factor_validation_status, v.confidence::text as confidence, v.tree_version, v.tree_sha256 from mart.metric_node_values v where {where} order by v.issuer_id, v.period desc limit %s",
+                    f"select v.issuer_id, v.node_id::text as node_id, v.node_key, v.period, v.period_tag, v.value::text as value, v.unit, v.availability_status, v.reason_codes, v.source_evidence_status, v.confidence::text as confidence, v.tree_version, v.tree_sha256 from mart.metric_node_values v where {where} order by v.issuer_id, v.period desc limit %s",
                     (run_id, node_key, *((issuer_id,) if issuer_id is not None else ()), limit),
                 ).fetchall()
                 conn.execute("reset role")

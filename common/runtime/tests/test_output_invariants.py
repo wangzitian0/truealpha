@@ -406,13 +406,13 @@ def _seed_issuer(
         insert into mart.metric_node_values (
             run_id, issuer_id, node_id, node_key, period, period_tag,
             value, unit, availability_status, reason_codes,
-            source_evidence_status, factor_validation_status,
+            source_evidence_status,
             confidence, tree_id, tree_version, tree_sha256, input_observation_ids
         ) values (
             %(run)s, %(issuer)s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid,
             'gppe_uniform_charge_v0', %(period)s, 'FY',
             %(value)s, 'per_employee', %(availability_status)s, %(reasons)s,
-            'verified', 'accepted', 0.9,
+            'verified', 0.9,
             'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0',
             %(seed)s, %(observations)s
         )
@@ -901,9 +901,9 @@ def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
 
     insert = (
         "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, period_tag, value, unit,"
-        " availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id,"
+        " availability_status, reason_codes, source_evidence_status, confidence, tree_id,"
         " tree_version, tree_sha256) values (%s, 'issuer:reasoned', %s::uuid, %s, '2026-03-31', 'cutoff', %s, 'ratio',"
-        " %s, '{}', 'degraded', 'not_evaluated', %s, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)"
+        " %s, '{}', 'degraded', %s, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)"
     )
     low_node, peg_node = "7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1803", "7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1804"
     conn.execute(insert, (run_id, low_node, "peg_low", Decimal("1.5"), "low_confidence", Decimal("0.4"), SEED_SHA256))
@@ -1068,12 +1068,12 @@ def test_fund_virtual_company_weights_conserved_passes_valid_row_and_fails_on_fa
             run_id, fund_id, report_period, transaction_time, cutoff,
             definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
             total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
-            availability_status, source_evidence_status, factor_validation_status
+            availability_status, source_evidence_status
         ) values (
             'capture-run:1641', 'etf:series:QQQ', '2026-06-30', '2026-06-30T00:00:00Z',
             '2026-06-30T00:00:00Z', 'v0', repeat('a', 64), 0.12, 'price_to_gross_profit',
             99.8, 98.5, 95.0, 100, 95, 0.90,
-            'available', 'verified', 'accepted'
+            'available', 'verified'
         )
         """
     )
@@ -1112,9 +1112,9 @@ def test_persist_records_critical_and_fact_invariants_and_only_critical_fails(
     refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     conn.execute(
         "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, period_tag, value, unit,"
-        " availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id,"
+        " availability_status, reason_codes, source_evidence_status, confidence, tree_id,"
         " tree_version, tree_sha256) values (%s, 'issuer:persist', '7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1804'::uuid,"
-        " 'peg_consensus', '2026-03-31', 'cutoff', null, 'ratio', 'unavailable', '{}', 'degraded', 'not_evaluated',"
+        " 'peg_consensus', '2026-03-31', 'cutoff', null, 'ratio', 'unavailable', '{}', 'degraded',"
         " null, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)",
         (run_id, SEED_SHA256),
     )

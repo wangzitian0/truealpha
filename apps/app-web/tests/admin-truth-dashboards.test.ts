@@ -224,7 +224,6 @@ __setApiFetch(async (input) => {
             tier: "tech",
             availability: "low_confidence",
             source_evidence_status: "degraded",
-            factor_validation_status: "accepted",
             peg: null,
             peg_reason_codes: ["non_positive_growth"],
             gppe_variants: {},
@@ -260,7 +259,6 @@ __setApiFetch(async (input) => {
                 period_end: "2026-09-30",
                 availability_status: "low_confidence",
                 source_evidence_status: "verified",
-                factor_validation_status: "accepted",
               },
             ],
           },
@@ -305,7 +303,6 @@ __setApiFetch(async (input) => {
             tier: "tech",
             availability: "low_confidence",
             source_evidence_status: "degraded",
-            factor_validation_status: "accepted",
             peg: null,
             peg_reason_codes: ["insufficient_earnings_history"],
           },
@@ -506,13 +503,13 @@ try {
   const rankHtml = renderToStaticMarkup(await RankingsPage({ searchParams: Promise.resolve({}) }));
   assertCleanHtml(rankHtml, "RankingsPage");
   assert(rankHtml.includes("review: reviewed"), "RankingsPage ClaimCeilingBanner renders review_state");
-  assert(rankHtml.includes("degraded / accepted"), "RankingsPage renders 3-dim statuses");
+  assert(rankHtml.includes(">degraded<"), "RankingsPage renders source_evidence_status");
   assert(rankHtml.includes("non_positive_growth"), "RankingsPage renders peg_reason_codes");
 
   const themesHtml = renderToStaticMarkup(await ThemesPage());
   assertCleanHtml(themesHtml, "ThemesPage");
   assert(themesHtml.includes("Unvisited theme rows (no segment partition):"), "ThemesPage renders unvisited_count");
-  assert(themesHtml.includes("verified / accepted"), "ThemesPage renders 3-dim statuses");
+  assert(themesHtml.includes(">verified<"), "ThemesPage renders source_evidence_status");
 
   const entityHtml = renderToStaticMarkup(
     await EntityDetailPage({ params: Promise.resolve({ id: ISSUER_ID }), searchParams: Promise.resolve({}) }),

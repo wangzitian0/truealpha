@@ -1,4 +1,4 @@
-"""Producer-computed §8 availability, evidence, and validation status dimensions."""
+"""Producer-computed availability and input-evidence status dimensions."""
 
 from __future__ import annotations
 
@@ -6,10 +6,9 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
-from factors.validation_records import validation_status_for
 from psycopg import Connection
 from truealpha_contracts.environment_contract import load_environment_contract
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import AvailabilityStatus, InputEvidenceStatus
 from truealpha_contracts.universes import universes_with_role
 
 LOW_CONFIDENCE_FLOOR = Decimal("0.50")
@@ -95,14 +94,14 @@ def coverage_status_dimensions(
     value_present: bool,
     confidence: Decimal,
     fully_evidenced: bool,
-) -> tuple[AvailabilityStatus, InputEvidenceStatus, FactorValidationStatus]:
+) -> tuple[AvailabilityStatus, InputEvidenceStatus]:
     if not value_present:
-        return (AvailabilityStatus.UNAVAILABLE, InputEvidenceStatus.DEGRADED, FactorValidationStatus.NOT_EVALUATED)
+        return (AvailabilityStatus.UNAVAILABLE, InputEvidenceStatus.DEGRADED)
     availability = (
         AvailabilityStatus.LOW_CONFIDENCE if confidence < LOW_CONFIDENCE_FLOOR else AvailabilityStatus.AVAILABLE
     )
     evidence = InputEvidenceStatus.VERIFIED if fully_evidenced else InputEvidenceStatus.DEGRADED
-    return (availability, evidence, FactorValidationStatus.NOT_EVALUATED)
+    return (availability, evidence)
 
 
 def resolve_raw_pointers(connection: Connection[Any], observation_ids: Iterable[str]) -> dict[str, int | None]:
@@ -145,11 +144,5 @@ def source_evidence_status_for(
     return InputEvidenceStatus.VERIFIED
 
 
-def factor_validation_status_for(definition_ids: Iterable[str]) -> FactorValidationStatus:
-    return validation_status_for(definition_ids)
-
-
-def statuses_without_raw_pointer(
-    definition_ids: Iterable[str] = (),
-) -> tuple[InputEvidenceStatus, FactorValidationStatus]:
-    return InputEvidenceStatus.DEGRADED, factor_validation_status_for(definition_ids)
+def statuses_without_raw_pointer() -> InputEvidenceStatus:
+    return InputEvidenceStatus.DEGRADED

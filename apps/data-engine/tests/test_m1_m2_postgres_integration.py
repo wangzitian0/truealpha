@@ -278,9 +278,8 @@ def test_the_report_counts_unavailable_q3_and_q4_rows_by_reason_and_names_their_
     for issuer in _T772_ISSUERS:
         connection.execute(
             "insert into mart.issuer_analyst_ratings "
-            "(run_id, issuer_id, cutoff, reason_codes, availability_status, source_evidence_status, "
-            "factor_validation_status) "
-            "values (%s, %s, %s, array['no_analyst_coverage'], 'unavailable', 'degraded', 'not_evaluated')",
+            "(run_id, issuer_id, cutoff, reason_codes, availability_status, source_evidence_status) "
+            "values (%s, %s, %s, array['no_analyst_coverage'], 'unavailable', 'degraded')",
             (_T772_HEAD, issuer.issuer_id, _T772_CUTOFF),
         )
 
@@ -311,8 +310,8 @@ def test_the_report_answers_q3_and_q4_only_for_a_row_that_carries_the_value(
     for issuer_id, rating in ((_T772_A, Decimal("4.2")), (_T772_B, None)):
         connection.execute(
             "insert into mart.issuer_analyst_ratings "
-            "(run_id, issuer_id, cutoff, consensus_rating, availability_status, source_evidence_status, "
-            "factor_validation_status) values (%s, %s, %s, %s, 'available', 'verified', 'accepted')",
+            "(run_id, issuer_id, cutoff, consensus_rating, availability_status, source_evidence_status) "
+            "values (%s, %s, %s, %s, 'available', 'verified')",
             (_T772_HEAD, issuer_id, _T772_CUTOFF, rating),
         )
 
