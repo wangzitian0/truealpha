@@ -60,6 +60,9 @@ class HealthReport:
 
 def _parse_kind(value: object, check: str) -> str:
     kind = str(value or "fact")
+    if kind == "hard":
+        # Legacy manifests released before v0.3.11 declared "hard"; normalize to "fact".
+        return "fact"
     if kind != "fact":
         raise VerdictCheckFailure(f"{check}: invalid verdict kind {kind!r}; expected 'fact'")
     return kind
@@ -396,9 +399,7 @@ def check_nightly_verdicts(
         print(f"({len(failures)} of {len(expectations)} expected checks; expectations {source})", file=sys.stderr)
         return 1
     fact_suffix = f" ({len(facts)} fact observation(s) logged)" if facts else ""
-    print(
-        f"{name}: all {len(expectations)} nightly checks are on time and hard gates are green{fact_suffix} ({source})"
-    )
+    print(f"{name}: all {len(expectations)} nightly checks are on time{fact_suffix} ({source})")
     return 0
 
 

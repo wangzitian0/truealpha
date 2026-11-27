@@ -99,6 +99,20 @@ def test_a_red_but_stale_fact_verdict_fails_for_staleness(capsys: pytest.Capture
     assert "stopped ticking" in capsys.readouterr().err
 
 
+def test_legacy_pre_v0311_hard_kind_is_normalized_to_fact(capsys: pytest.CaptureFixture[str]) -> None:
+    """Historical releases (< v0.3.11) still have kind='hard' in git show <release>:tools/nightly_verdicts.json."""
+
+    def _legacy_manifest(_ref: str) -> str:
+        data = json.loads(_module.EXPECTATIONS_PATH.read_text(encoding="utf-8"))
+        data["checks"]["job_run_health"]["kind"] = "hard"
+        return json.dumps(data)
+
+    verdicts = [v for v in _all_green() if v["check"] != "job_run_health"]
+    verdicts.append(_verdict("job_run_health", 1.0, ok=False, summary="failed: 1 failure"))
+    assert _run(verdicts, reader=_legacy_manifest) == 0
+    assert "fact: job_run_health: red since" in capsys.readouterr().out
+
+
 def test_invalid_verdict_kind_is_refused() -> None:
     with pytest.raises(_module.VerdictCheckFailure, match="invalid verdict kind"):
         _module.parse_expectations(json.dumps({"checks": {"bad": {"cadence_hours": 24, "job": "j", "kind": "warn"}}}))
