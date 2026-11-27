@@ -7,6 +7,7 @@ import inspect
 from decimal import Decimal
 from typing import Any
 
+import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.strategy import ExclusionReason
@@ -21,12 +22,11 @@ from llm_service.services._db import with_app_runtime, with_mart_readonly
 from llm_service.services.panel_service import (
     GPPE_VARIANT_KEYS,
     RANKING_PANEL_INPUT_KEYS,
-    WIDE_PANEL_INPUT_KEYS,
     EntityDisplayItem,
     WidePanelCellDto,
     _display_label,
-    _load_wide_panel,
-    load_entity_display_items,
+    _load_wide_panel_from_cursor,
+    load_entity_display_items_from_cursor,
 )
 
 DASHBOARD_STRATEGY_ID = "large_model_value_v0"
@@ -418,13 +418,36 @@ def get_strategy_run_page(
 ) -> StrategyRunPageResponse:
     norm_universe = "all" if universe is None else (normalize_ranking_universe(universe) or "all")
     norm_convention = normalize_peg_convention(convention)
-    report = _load_strategy_report(
-        context,
-        strategy_id=strategy_id,
-        universe=norm_universe,
-        convention=norm_convention,
-        database_url=database_url,
-    )
+    repo = PostgresStrategyRunRepository(database_url=database_url or settings.database_url)
+
+    def _q(
+        cur: Any,
+    ) -> tuple[
+        StrategyRunReport | StrategyRunUnavailable,
+        dict[str, EntityDisplayItem],
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, WidePanelCellDto]],
+    ]:
+        rep = repo.get_latest_from_cursor(
+            cur,
+            strategy_id=strategy_id,
+            context=context,
+            universe=norm_universe,
+            convention=norm_convention,
+        )
+        if isinstance(rep, StrategyRunUnavailable):
+            return rep, {}, {}, {}
+        d_map = load_entity_display_items_from_cursor(cur)
+        p_map = read_strategy_provenance(cur, rep.strategy_run_id) if rep.strategy_run_id else {}
+        w_panel = _load_wide_panel_from_cursor(cur, GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS)
+        return rep, d_map, p_map, w_panel
+
+    try:
+        report, display_map, prov_map, wide_panel = with_mart_readonly(_q, database_url=database_url)
+    except psycopg.Error:
+        report = StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")
+        display_map, prov_map, wide_panel = {}, {}, {}
+
     if isinstance(report, StrategyRunUnavailable):
         return StrategyRunPageResponse(
             available=False,
@@ -433,12 +456,6 @@ def get_strategy_run_page(
             universe=norm_universe,
             convention=norm_convention,
         )
-    display_map = load_entity_display_items(database_url=database_url)
-    prov_map = _load_strategy_provenance(report.strategy_run_id, database_url=database_url)
-    wide_panel = _load_wide_panel(
-        WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS,
-        database_url=database_url,
-    )
     target_cutoff = cutoff or max((d.cutoff_at.isoformat() for d in report.decisions), default=None)
     filtered = [
         d

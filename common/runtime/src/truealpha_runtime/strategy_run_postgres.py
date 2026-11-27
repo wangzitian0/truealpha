@@ -79,18 +79,18 @@ LATEST_RUN_SQL = """
     where th.availability is not null or cr.strategy_run_id is not null
 """
 
-DECISIONS_FROM_SQL = """
-    from mart.strategy_decisions d
-    left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
-    left join lateral (
-        select m.confidence
-        from mart.metric_node_values m
-        where m.run_id = scope.capture_run_id
-          and m.issuer_id = d.issuer_id
-          and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
-        order by m.period desc, m.node_id
-        limit 1
-    ) m on true
+
+def _decisions_sql(convention: str) -> str:
+    """Build the `strategy_decisions` query, joining PEG metric laterals only for conventions that read them."""
+    peg_selects: list[str] = []
+    peg_joins: list[str] = []
+    if convention == "consensus":
+        peg_selects.append(
+            " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
+            " peg_c.reason_codes as peg_consensus_reason_codes,"
+        )
+        peg_joins.append(
+            """
     left join lateral (
         select mc.value, mc.reason_codes
         from mart.metric_node_values mc
@@ -108,7 +108,15 @@ DECISIONS_FROM_SQL = """
           and mcr.node_key = 'peg_consensus_rank'
         order by mcr.period desc, mcr.node_id
         limit 1
-    ) peg_cr on true
+    ) peg_cr on true"""
+        )
+    elif convention == "geometric_cagr":
+        peg_selects.append(
+            " peg_g.value as peg_geometric_cagr, peg_gr.value as peg_geometric_cagr_rank,"
+            " peg_g.reason_codes as peg_geometric_cagr_reason_codes,"
+        )
+        peg_joins.append(
+            """
     left join lateral (
         select mc.value, mc.reason_codes
         from mart.metric_node_values mc
@@ -126,26 +134,38 @@ DECISIONS_FROM_SQL = """
           and mcr.node_key = 'peg_geometric_cagr_rank'
         order by mcr.period desc, mcr.node_id
         limit 1
-    ) peg_gr on true
+    ) peg_gr on true"""
+        )
+    return (
+        "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
+        " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
+        " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
+        " d.eligible, d.outcome, d.exclusion_reason, d.availability_status,"
+        " d.source_evidence_status, d.peg_reason_codes,"
+        " d.rank, d.target_weight, d.peg, d.peg_rank,"
+        + "".join(peg_selects)
+        + " d.labor_efficiency_metric, m.confidence "
+        + """
+    from mart.strategy_decisions d
+    left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+    left join lateral (
+        select m.confidence
+        from mart.metric_node_values m
+        where m.run_id = scope.capture_run_id
+          and m.issuer_id = d.issuer_id
+          and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
+        order by m.period desc, m.node_id
+        limit 1
+    ) m on true"""
+        + "".join(peg_joins)
+        + """
     left join lateral (
         select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = d.issuer_id limit 1
     ) ei on true
     where d.strategy_run_id = %s
     order by d.cutoff_at, coalesce(ei.legacy_id, d.issuer_id)
 """
-_DECISIONS_SQL = (
-    "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
-    " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
-    " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
-    " d.eligible, d.outcome, d.exclusion_reason, d.availability_status,"
-    " d.source_evidence_status, d.peg_reason_codes,"
-    " d.rank, d.target_weight, d.peg, d.peg_rank,"
-    " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
-    " peg_c.reason_codes as peg_consensus_reason_codes,"
-    " peg_g.value as peg_geometric_cagr, peg_gr.value as peg_geometric_cagr_rank,"
-    " peg_g.reason_codes as peg_geometric_cagr_reason_codes,"
-    " d.labor_efficiency_metric, m.confidence " + DECISIONS_FROM_SQL
-)
+    )
 
 
 def read_strategy_provenance(cursor: Any, strategy_run_id: str) -> dict[str, dict[str, Any]]:
@@ -276,51 +296,35 @@ class PostgresStrategyRunRepository:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
-    def get_latest(
+    def get_latest_from_cursor(
         self,
+        cursor: Any,
         *,
         strategy_id: str,
         context: AccessContext,
         universe: str | None = None,
         convention: str | None = None,
     ) -> StrategyRunReport | StrategyRunUnavailable:
+        """Read the latest governed strategy run on an already-pooled read-only cursor."""
         del context
         norm_convention = _normalize_convention(convention)
-        head_age_hours: float | None = None
-        head_limit_hours: float | None = None
-        head_freshness: str | None = None
-        try:
-            with (
-                psycopg.connect(self._database_url, connect_timeout=5) as connection,
-                connection.cursor(row_factory=dict_row) as cursor,
-            ):
-                cursor.execute("set local role mart_readonly")
-                cursor.execute("select set_config('statement_timeout', '5s', true)")
-                cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id, universe=universe))
-                run_row = cursor.fetchone()
-                if run_row is None:
-                    cursor.execute("reset role")
-                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
-                if run_row.get("head_availability") is not None and run_row.get("head_run_id") is None:
-                    cursor.execute("reset role")
-                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="head_withheld")
-                if run_row.get("strategy_run_id") is None:
-                    cursor.execute("reset role")
-                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
-                head_age_hours = float(run_row["head_age_hours"]) if run_row.get("head_age_hours") is not None else None
-                head_limit_hours = (
-                    float(run_row["head_limit_hours"]) if run_row.get("head_limit_hours") is not None else None
-                )
-                head_freshness = str(run_row["head_freshness"]) if run_row.get("head_freshness") is not None else None
-                cursor.execute(_DECISIONS_SQL, (run_row["strategy_run_id"],))
-                decision_rows = cursor.fetchall()
-                cursor.execute("reset role")
-                if strategy_id != "large_model_value_v0":
-                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
-                if not decision_rows:
-                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="empty_decisions")
-        except psycopg.Error:
-            return StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")
+        cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id, universe=universe))
+        run_row = cursor.fetchone()
+        if run_row is None:
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+        if run_row.get("head_availability") is not None and run_row.get("head_run_id") is None:
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="head_withheld")
+        if run_row.get("strategy_run_id") is None:
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+        head_age_hours = float(run_row["head_age_hours"]) if run_row.get("head_age_hours") is not None else None
+        head_limit_hours = float(run_row["head_limit_hours"]) if run_row.get("head_limit_hours") is not None else None
+        head_freshness = str(run_row["head_freshness"]) if run_row.get("head_freshness") is not None else None
+        cursor.execute(_decisions_sql(norm_convention), (run_row["strategy_run_id"],))
+        decision_rows = cursor.fetchall()
+        if strategy_id != "large_model_value_v0":
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
+        if not decision_rows:
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="empty_decisions")
         try:
             return StrategyRunReport(
                 strategy_id=strategy_id,  # type: ignore[arg-type]
@@ -339,3 +343,30 @@ class PostgresStrategyRunRepository:
             )
         except _ROW_VALIDATION_ERRORS:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
+
+    def get_latest(
+        self,
+        *,
+        strategy_id: str,
+        context: AccessContext,
+        universe: str | None = None,
+        convention: str | None = None,
+    ) -> StrategyRunReport | StrategyRunUnavailable:
+        try:
+            with (
+                psycopg.connect(self._database_url, connect_timeout=5) as connection,
+                connection.cursor(row_factory=dict_row) as cursor,
+            ):
+                cursor.execute("set local role mart_readonly")
+                cursor.execute("select set_config('statement_timeout', '5s', true)")
+                result = self.get_latest_from_cursor(
+                    cursor,
+                    strategy_id=strategy_id,
+                    context=context,
+                    universe=universe,
+                    convention=convention,
+                )
+                cursor.execute("reset role")
+                return result
+        except psycopg.Error:
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")

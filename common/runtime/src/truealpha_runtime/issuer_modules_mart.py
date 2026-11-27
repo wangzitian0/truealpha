@@ -90,6 +90,7 @@ __all__ = [
     "PostgresIssuerModuleReader",
     "SUPPLY_CHAIN_EXPOSURE_SQL",
     "SupplyChainExposure",
+    "_display_keys_for_row",
     "issuer_identity_sql",
     "load_entity_display_map",
     "resolve_issuer_candidates_from_cursor",
@@ -123,11 +124,34 @@ _RESOLVE_BATCH_CANDIDATES_SQL = (
     f"from unnest(%s::text[]) as u(raw_q) cross join lateral (select btrim(u.raw_q) as q) inp join mart.entity_identity ei on ({_IDENTITY_MATCH_SQL})"
 )
 ENTITY_DISPLAY_SQL = (
-    "select r.issuer_id, coalesce(nullif(btrim(r.ticker), ''), nullif(btrim(ei.current_ticker), '')) as ticker, "
-    "coalesce(nullif(btrim(r.display_name), ''), nullif(btrim(ei.name), '')) as display_name, ei.legacy_id "
-    "from mart.entity_display_resolution r left join (select distinct on (e.entity_id::text) e.entity_id::text as issuer_id, "
-    "e.current_ticker, e.name, e.legacy_id from mart.entity_identity e order by e.entity_id::text, e.legacy_id) ei on ei.issuer_id = r.issuer_id"
+    "select ei.entity_id::text as issuer_id, "
+    "coalesce("
+    "case when split_part(ei.listing_id, ':', 2) in ('xnas', 'xnys', 'arcx', 'bats') "
+    "then nullif(upper(split_part(ei.listing_id, ':', 3)), '') end, "
+    "nullif(btrim(ei.current_ticker), '')) as ticker, "
+    "nullif(btrim(ei.name), '') as display_name, "
+    "ei.legacy_id, nullif(btrim(ei.cik), '') as cik, nullif(btrim(ei.lei), '') as lei "
+    "from mart.entity_identity ei where ei.kind = 'issuer' "
+    "order by (ei.listing_id is not null) desc, (ei.current_ticker is not null) desc, ei.entity_id::text"
 )
+
+
+def _display_keys_for_row(row: dict[str, Any]) -> tuple[str, ...]:
+    """Return canonical and legacy lookup keys covered by a `mart.entity_identity` display row."""
+    keys: list[str] = []
+    for raw in (row.get("issuer_id"), row.get("legacy_id")):
+        if isinstance(raw, str) and (clean := raw.strip()) and clean not in keys:
+            keys.append(clean)
+    if isinstance(cik := row.get("cik"), str) and (clean_cik := cik.strip()):
+        padded = clean_cik.zfill(10)
+        for cand in (f"issuer:cik:{padded}", f"company:cik:{padded.lstrip('0') or '0'}"):
+            if cand not in keys:
+                keys.append(cand)
+    if isinstance(lei := row.get("lei"), str) and (clean_lei := lei.strip()):
+        cand = f"issuer:lei:{clean_lei}"
+        if cand not in keys:
+            keys.append(cand)
+    return tuple(keys)
 
 
 def _query_rows(database_url: str, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -153,16 +177,19 @@ def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, st
     except psycopg.Error:
         return merged
     for row in rows:
-        iid, leg = str(row.get("issuer_id") or "").strip(), str(row.get("legacy_id") or "").strip()
+        iid = str(row.get("issuer_id") or "").strip()
+        leg = str(row.get("legacy_id") or "").strip()
         fb = KNOWN_ENTITY_DISPLAY.get(leg) or KNOWN_ENTITY_DISPLAY.get(iid)
         t = str(row.get("ticker") or "").strip() or (fb[0] if fb else "")
         n = str(row.get("display_name") or "").strip() or (fb[1] if fb else "")
         label = (n if n.startswith(f"{t} ·") else f"{t} · {n}") if (t and n) else (t or n)
         if label:
-            if iid:
-                merged[iid] = (t or iid, label)
-            if leg and leg not in merged:
-                merged[leg] = (t or leg, label)
+            entry = (t or iid or leg, label)
+            for idx, key in enumerate(_display_keys_for_row(row)):
+                if idx == 0:
+                    merged[key] = entry
+                else:
+                    merged.setdefault(key, entry)
     return merged
 
 

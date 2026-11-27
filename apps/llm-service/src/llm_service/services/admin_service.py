@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 import psycopg
@@ -24,6 +25,94 @@ REGISTERED_RAW_SOURCE_FILTER = f"not (source ~ '{SWEEP_RUN_SOURCE_REGEX_SOURCE}'
 UTC_DAY_START_SQL = "(date_trunc('day', now() at time zone 'utc') at time zone 'utc')"
 NON_CANARY_UNIVERSE_WHERE = "s.universe_id not like all (%s::text[])"
 LEDGER_COVERAGE_DAYS = 8
+_DB_HYGIENE_CACHE_TTL_SECONDS = 60.0
+_DB_HYGIENE_LOCK = threading.Lock()
+_DB_HYGIENE_CACHE: tuple[float, dict[str, Any]] | None = None
+
+
+def _clear_db_hygiene_cache() -> None:
+    """Reset the cached `db_hygiene` metrics (used in tests)."""
+    global _DB_HYGIENE_CACHE
+    with _DB_HYGIENE_LOCK:
+        _DB_HYGIENE_CACHE = None
+
+
+def _aggregate_ledger_window_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Derive `traffic`, `usage_rows`, and `model_1302_by_day` from one 14-day `(day, source)` ledger scan."""
+    traffic_acc: dict[str, dict[str, Any]] = {}
+    usage_acc: dict[str, dict[str, Any]] = {}
+    err_rows: list[dict[str, Any]] = []
+    for r in rows:
+        src = str(r["source"])
+        day_str = str(r["day_str"])
+        t_calls = int(r.get("today_calls") or 0)
+        if t_calls > 0:
+            t_entry = traffic_acc.setdefault(
+                src, {"source": src, "calls": 0, "failed": 0, "_dur_sum": 0, "_dur_cnt": 0, "last_call": None}
+            )
+            t_entry["calls"] += t_calls
+            t_entry["failed"] += int(r.get("today_failed") or 0)
+            t_entry["_dur_sum"] += int(r.get("today_dur_sum") or 0)
+            t_entry["_dur_cnt"] += int(r.get("today_dur_cnt") or 0)
+            if (lc := r.get("today_last_call")) and (t_entry["last_call"] is None or str(lc) > t_entry["last_call"]):
+                t_entry["last_call"] = str(lc)
+        c7 = int(r.get("calls_7d") or 0)
+        if c7 > 0:
+            u = usage_acc.setdefault(
+                src,
+                {
+                    "source": src,
+                    "calls_1s": 0,
+                    "calls_30s": 0,
+                    "calls_60s": 0,
+                    "calls_24h": 0,
+                    "failed_24h": 0,
+                    "rate_limited_24h": 0,
+                    "calls_7d": 0,
+                    "failed_7d": 0,
+                },
+            )
+            for k in (
+                "calls_1s",
+                "calls_30s",
+                "calls_60s",
+                "calls_24h",
+                "failed_24h",
+                "rate_limited_24h",
+                "calls_7d",
+                "failed_7d",
+            ):
+                u[k] += int(r.get(k) or 0)
+        s429 = int(r.get("status_429") or 0)
+        fcalls = int(r.get("failed_calls") or 0)
+        if s429 > 0 or fcalls > 0:
+            err_rows.append(
+                {
+                    "day": day_str,
+                    "source": src,
+                    "status_429": s429,
+                    "code_1302": int(r.get("code_1302") or 0),
+                    "total_calls": int(r.get("total_calls") or 0),
+                    "failed_calls": fcalls,
+                }
+            )
+    traffic: list[dict[str, Any]] = []
+    for src, acc in traffic_acc.items():
+        dur_cnt = acc.pop("_dur_cnt")
+        dur_sum = acc.pop("_dur_sum")
+        acc["avg_ms"] = (
+            int((Decimal(dur_sum) / Decimal(dur_cnt)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            if dur_cnt > 0
+            else None
+        )
+        traffic.append(acc)
+    traffic.sort(key=lambda x: (-int(x["calls"]), x["source"]))
+    usage_rows = [usage_acc[k] for k in sorted(usage_acc)]
+    err_rows.sort(key=lambda x: x["source"])
+    err_rows.sort(key=lambda x: x["day"], reverse=True)
+    return traffic, usage_rows, err_rows
 
 
 def governed_latest_per_universe_sql(table: str, extra_cols: str = "", payload_expr: str = "r.payload") -> str:
@@ -720,26 +809,56 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             cur,
             f"select source, count(*)::int as fetches_total, "
             f"(count(*) filter (where recorded_at > now() - interval '24 hours'))::int as fetches_24h, "
-            f"max(recorded_at)::text as last_fetch from raw.fetches where {REGISTERED_RAW_SOURCE_FILTER} "
-            "group by source order by max(recorded_at) desc, count(*) desc limit 12",
+            f"max(recorded_at)::text as last_fetch from raw.fetches "
+            f"group by source having {REGISTERED_RAW_SOURCE_FILTER} "
+            "order by max(recorded_at) desc, count(*) desc limit 12",
         )
-        capture_runs = _rows(
+        recent_status = _rows(
             cur,
-            "select run_id, universe_id, cutoff::text as cutoff, obligation_count as obligations, "
-            "(success_count + unchanged_count)::int as resolved, failed_count as failed, complete "
-            "from ops.capture_status order by cutoff desc limit 12",
+            "select run_id, universe_id, cutoff::text as cutoff_str, "
+            "to_char(cutoff at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as cutoff_iso, "
+            "obligation_count, (success_count + unchanged_count)::int as resolved, "
+            "unchanged_count::int as unchanged_count, failed_count, complete, "
+            "(cutoff > now() - interval '24 hours') as in_24h "
+            "from ops.capture_status where cutoff >= now() - interval '3 days' order by cutoff desc",
         )
-        traffic = _rows(
+        if not recent_status:
+            recent_status = _rows(
+                cur,
+                "select run_id, universe_id, cutoff::text as cutoff_str, "
+                "to_char(cutoff at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as cutoff_iso, "
+                "obligation_count, (success_count + unchanged_count)::int as resolved, "
+                "unchanged_count::int as unchanged_count, failed_count, complete, "
+                "(cutoff > now() - interval '24 hours') as in_24h "
+                "from ops.capture_status order by ops.capture_status.cutoff desc limit 12",
+            )
+        capture_runs = [
+            {
+                "run_id": r["run_id"],
+                "universe_id": r["universe_id"],
+                "cutoff": r["cutoff_str"],
+                "obligations": r["obligation_count"],
+                "resolved": r["resolved"],
+                "failed": r["failed_count"],
+                "complete": r["complete"],
+            }
+            for r in recent_status[:12]
+        ]
+        ledger_window = _optional_rows(
             cur,
-            f"select l.source, count(*)::int as calls, (count(*) filter (where not l.ok))::int as failed, "
-            f"round(avg(l.duration_ms))::int as avg_ms, "
-            f"to_char(max(l.called_at) at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS\"Z\"') as last_call "
-            f"from staging.api_call_ledger l where l.called_at >= {UTC_DAY_START_SQL} group by l.source order by calls desc",
-        )
-        usage_rows = _optional_rows(
-            cur,
-            """
-            select l.source,
+            f"""
+            select (l.called_at at time zone 'utc')::date as day,
+                   to_char((l.called_at at time zone 'utc')::date, 'YYYY-MM-DD') as day_str,
+                   l.source,
+                   count(*)::int as total_calls,
+                   (count(*) filter (where not l.ok))::int as failed_calls,
+                   (count(*) filter (where l.status_code = 429))::int as status_429,
+                   (count(*) filter (where coalesce(l.error, '') ilike %s or coalesce(l.error, '') ilike %s))::int as code_1302,
+                   coalesce(sum(l.duration_ms) filter (where l.called_at >= {UTC_DAY_START_SQL}), 0)::bigint as today_dur_sum,
+                   (count(l.duration_ms) filter (where l.called_at >= {UTC_DAY_START_SQL}))::int as today_dur_cnt,
+                   (count(*) filter (where l.called_at >= {UTC_DAY_START_SQL}))::int as today_calls,
+                   (count(*) filter (where l.called_at >= {UTC_DAY_START_SQL} and not l.ok))::int as today_failed,
+                   to_char(max(l.called_at) filter (where l.called_at >= {UTC_DAY_START_SQL}) at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as today_last_call,
                    (count(*) filter (where l.called_at > now() - interval '1 second'))::int as calls_1s,
                    (count(*) filter (where l.called_at > now() - interval '30 seconds'))::int as calls_30s,
                    (count(*) filter (where l.called_at > now() - interval '60 seconds'))::int as calls_60s,
@@ -749,30 +868,13 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
                    (count(*) filter (where l.called_at > now() - interval '7 days'))::int as calls_7d,
                    (count(*) filter (where l.called_at > now() - interval '7 days' and not l.ok))::int as failed_7d
             from staging.api_call_ledger l
-            where l.called_at > now() - interval '7 days'
-            group by l.source
-            order by l.source
-            """,
-            ("%1302%",),
-        )
-        capacity = _build_vendor_capacity(contract, normalized_env, usage_rows)
-        model_1302_by_day = _optional_rows(
-            cur,
-            f"""
-            select to_char((l.called_at at time zone 'utc')::date, 'YYYY-MM-DD') as day,
-                   l.source,
-                   (count(*) filter (where l.status_code = 429))::int as status_429,
-                   (count(*) filter (where coalesce(l.error, '') ilike %s or coalesce(l.error, '') ilike %s))::int as code_1302,
-                   count(*)::int as total_calls,
-                   (count(*) filter (where not l.ok))::int as failed_calls
-            from staging.api_call_ledger l
             where l.called_at >= {UTC_DAY_START_SQL} - interval '13 days'
-            group by 1, 2
-            having count(*) filter (where l.status_code = 429 or not l.ok) > 0
-            order by 1 desc, 2
+            group by 1, 2, 3
             """,
-            ("%1302%", "%rate limit%"),
+            ("%1302%", "%rate limit%", "%1302%"),
         )
+        traffic, usage_rows, model_1302_by_day = _aggregate_ledger_window_rows(ledger_window)
+        capacity = _build_vendor_capacity(contract, normalized_env, usage_rows)
         recent_calls = _rows(
             cur,
             "select l.id, to_char(l.called_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS\"Z\"') as called_at, "
@@ -852,51 +954,92 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             limit 40
             """,
         )
-        stats_reset_rows = _optional_rows(
-            cur,
-            "select to_char(stats_reset at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as stats_reset "
-            "from pg_stat_database where datname = current_database()",
-        )
-        zero_scan_indexes = _optional_rows(
-            cur,
-            "select s.schemaname, s.relname as table_name, s.indexrelname as index_name, "
-            "pg_relation_size(s.indexrelid)::bigint as size_bytes "
-            "from pg_stat_user_indexes s "
-            "join pg_index i on i.indexrelid = s.indexrelid "
-            "where s.schemaname in ('raw', 'staging', 'mart', 'ops', 'app') "
-            "  and not i.indisprimary and not i.indisunique and s.idx_scan = 0 "
-            "order by pg_relation_size(s.indexrelid) desc, s.schemaname, s.relname, s.indexrelname limit 50",
-        )
-        idle_tables = _optional_rows(
-            cur,
-            "select schemaname, relname as table_name, coalesce(n_live_tup, 0)::bigint as n_live_tup, "
-            "(coalesce(seq_scan, 0) + coalesce(idx_scan, 0))::bigint as total_scans, "
-            "pg_total_relation_size(relid)::bigint as size_bytes "
-            "from pg_stat_user_tables "
-            "where schemaname in ('raw', 'staging', 'mart', 'ops', 'app') "
-            "  and coalesce(seq_scan, 0) = 0 and coalesce(idx_scan, 0) = 0 "
-            "order by n_live_tup desc, pg_total_relation_size(relid) desc, schemaname, relname limit 50",
-        )
-        db_hygiene = {
-            "stats_reset": stats_reset_rows[0].get("stats_reset") if stats_reset_rows else None,
-            "zero_scan_indexes": zero_scan_indexes,
-            "idle_tables": idle_tables,
-        }
-        validation = _rows(
-            cur,
-            f"select 'plausibility sign checks' as check, "
-            f"case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict, "
-            f"coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail "
-            f"from mart.datahub_quality_report q join ops.capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
-            "order by s.cutoff desc limit 1",
-            (sentinel_likes,),
-        ) + _rows(
-            cur,
-            "select 'cross-run reuse (24h)' as check, "
-            "case when coalesce(sum(unchanged_count), 0) > 0 then 'active' else 'idle' end as verdict, "
-            "coalesce(sum(unchanged_count), 0) || ' vendor fetches avoided across ' || count(*) || ' runs' as detail "
-            "from ops.capture_status where cutoff > now() - interval '24 hours'",
-        )
+        global _DB_HYGIENE_CACHE
+        now_mono = time.monotonic()
+        db_hygiene: dict[str, Any] | None = None
+        if database_url is None:
+            with _DB_HYGIENE_LOCK:
+                if _DB_HYGIENE_CACHE is not None and now_mono - _DB_HYGIENE_CACHE[0] < _DB_HYGIENE_CACHE_TTL_SECONDS:
+                    db_hygiene = _DB_HYGIENE_CACHE[1]
+        if db_hygiene is None:
+            stats_reset_rows = _optional_rows(
+                cur,
+                "select to_char(stats_reset at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as stats_reset "
+                "from pg_stat_database where datname = current_database()",
+            )
+            zero_scan_indexes = _optional_rows(
+                cur,
+                "select s.schemaname, s.relname as table_name, s.indexrelname as index_name, "
+                "pg_relation_size(s.indexrelid)::bigint as size_bytes "
+                "from pg_stat_user_indexes s "
+                "join pg_index i on i.indexrelid = s.indexrelid "
+                "where s.schemaname in ('raw', 'staging', 'mart', 'ops', 'app') "
+                "  and not i.indisprimary and not i.indisunique and s.idx_scan = 0 "
+                "order by pg_relation_size(s.indexrelid) desc, s.schemaname, s.relname, s.indexrelname limit 50",
+            )
+            idle_tables = _optional_rows(
+                cur,
+                "select schemaname, relname as table_name, coalesce(n_live_tup, 0)::bigint as n_live_tup, "
+                "(coalesce(seq_scan, 0) + coalesce(idx_scan, 0))::bigint as total_scans, "
+                "pg_total_relation_size(relid)::bigint as size_bytes "
+                "from pg_stat_user_tables "
+                "where schemaname in ('raw', 'staging', 'mart', 'ops', 'app') "
+                "  and coalesce(seq_scan, 0) = 0 and coalesce(idx_scan, 0) = 0 "
+                "order by n_live_tup desc, pg_total_relation_size(relid) desc, schemaname, relname limit 50",
+            )
+            db_hygiene = {
+                "stats_reset": stats_reset_rows[0].get("stats_reset") if stats_reset_rows else None,
+                "zero_scan_indexes": zero_scan_indexes,
+                "idle_tables": idle_tables,
+            }
+            if database_url is None:
+                with _DB_HYGIENE_LOCK:
+                    _DB_HYGIENE_CACHE = (now_mono, db_hygiene)
+        non_canary_ids = [
+            r["run_id"]
+            for r in recent_status
+            if not any(str(r.get("universe_id") or "").startswith(pat.rstrip("%")) for pat in sentinel_likes)
+        ]
+        implausible_rows: list[dict[str, Any]] = []
+        if non_canary_ids:
+            q_rows = _optional_rows(
+                cur,
+                "select run_id, coalesce((payload->>'implausible_count')::int, 0)::int as implausible "
+                "from mart.datahub_quality_report where run_id = any(%s::text[])",
+                (non_canary_ids,),
+            )
+            q_by_run = {str(q["run_id"]): int(q["implausible"]) for q in q_rows}
+            for r in recent_status:
+                rid = str(r["run_id"])
+                if rid in q_by_run:
+                    imp = q_by_run[rid]
+                    implausible_rows.append(
+                        {
+                            "check": "plausibility sign checks",
+                            "verdict": "pass" if imp == 0 else "violations",
+                            "detail": f"{imp} implausible cells in the newest report",
+                        }
+                    )
+                    break
+        if not implausible_rows:
+            implausible_rows = _rows(
+                cur,
+                f"select 'plausibility sign checks' as check, "
+                f"case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict, "
+                f"coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail "
+                f"from mart.datahub_quality_report q join ops.capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
+                "order by s.cutoff desc limit 1",
+                (sentinel_likes,),
+            )
+        runs_24h = [r for r in recent_status if r.get("in_24h")]
+        unchanged_24h = sum(int(r.get("unchanged_count") or 0) for r in runs_24h)
+        validation = implausible_rows + [
+            {
+                "check": "cross-run reuse (24h)",
+                "verdict": "active" if unchanged_24h > 0 else "idle",
+                "detail": f"{unchanged_24h} vendor fetches avoided across {len(runs_24h)} runs",
+            }
+        ]
         return DatahubStatsResponse(
             sources=sources,
             capture_runs=capture_runs,
